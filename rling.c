@@ -99,9 +99,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.27 2020/07/19 03:06:48 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.28 2020/07/19 15:39:44 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.28  2020/07/19 15:39:44  dlr
+ * Minor change to define findeol, if no alternative implementations available.
+ *
  * Revision 1.27  2020/07/19 03:06:48  dlr
  * Improve portability for AIX and MacOSX
  *
@@ -380,6 +383,11 @@ void current_utc_time(struct timespec *ts) {
  * This is important to the operation of this program, and care should be
  * taken to ensure that the performance of this function is kept fast 
  */
+
+#if !defined(POWERPC) && !defined(INTEL)
+#define findeol(a,b) memchr(a,10,b)
+#endif
+
 #ifdef POWERPC
 #define findeol(a,b) memchr(a,10,b)
 #endif
