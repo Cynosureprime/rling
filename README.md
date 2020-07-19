@@ -66,7 +66,7 @@ This will read clean-list.txt, remove all duplicate lines, and re-write it (in o
 This will look in /path/to/names for all files, use gzcat to decompress or access them, pipe the result to rling which will then de-duplicate them all (keeping original order), and then pipe the resultant output to gzip -9 so as to create a new, de-duplicated name-list in compressed format.
 
 `rling -c all-names.txt matching.txt /path/to/names/[a-f]*`\
-This will read in all-names.txt, then find only names in the input file, and present in one or more of the /path/to/names[a-f] files.  If there are no matching lines, no date is output to matching.txt.
+This will read in all-names.txt, then find only names in the input file, and present in one or more of the /path/to/names[a-f] files.  If there are no matching lines, no data is output to matching.txt.
 
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.\
