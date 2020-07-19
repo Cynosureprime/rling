@@ -99,9 +99,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.28 2020/07/19 15:39:44 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.29 2020/07/19 16:22:50 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.29  2020/07/19 16:22:50  dlr
+ * Minor typo
+ *
  * Revision 1.28  2020/07/19 15:39:44  dlr
  * Minor change to define findeol, if no alternative implementations available.
  *
@@ -1329,7 +1332,7 @@ errexit:
     
     Fileinmem = realloc(Fileinmem,filesize + 16);
     if (!Fileinmem) {
-	fprintf(stderr,"Could not shink memory buffer\n");
+	fprintf(stderr,"Could not shrink memory buffer\n");
 	exit(1);
     }
     fclose(fi);
