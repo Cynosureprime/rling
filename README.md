@@ -16,7 +16,7 @@ In July, 2020, @tychotithonus asked a simple question - theoretically, could rli
 
 The essential task of removing lines from a file (or a database) has been fundamental to computing since the very earlies days, and rli seems "good enough" for most purposes.  But when the files get large, the amount of RAM used by rli is high, and the performace was not sufficient to the task at hand.  @tychotithonus also wanted a few new features.
 
-The performance of rling is impressive (this done on a Power8 system with 80 cores).
+The performance of rling is impressive (this done on a Power8 system with 80 cores). 1billion.txt is a ~10gigabyte file containing 1,000,000,000 lines.  rem is a file containg 6 lines matching ones scattered throughout the 1billion.txt file.
 
 | Program | Input    |  Remove | Memory | Time |
 | ------- | -------- | ------- | ------ | ---- |
