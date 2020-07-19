@@ -12,9 +12,9 @@
 * [Contact](#contact)
 
 ## General info
-In July, 2020, @tychotithonus asked a simple question - could rli be made better?  Answering that question took the CynoSurePrime team down several roads, looking for "the better ways" to handle the problem. It ended up in a "how many nanoseconds" race in the end!
+In July, 2020, @tychotithonus asked a simple question - theoretically, could rli be faster?  Answering that question took the CynoSurePrime team down several roads, looking for "the better ways" to handle the problem. It ended up in a "how many nanoseconds" race in the end!
 
-The essential task of removing lines from a file (or a database) has been fundamental to computing since the very earlies days, and rli seems "good enough" for most purposes.  But when the files get large, the amount of RAM used by rli is high, and the performace was not sufficient to the task at hand.  @rychnotithonus also wanted a few new features.
+The essential task of removing lines from a file (or a database) has been fundamental to computing since the very earlies days, and rli seems "good enough" for most purposes.  But when the files get large, the amount of RAM used by rli is high, and the performace was not sufficient to the task at hand.  @tychotithonus also wanted a few new features.
 
 The performance of rling is impressive (this done on a Power8 system with 80 cores).
 
