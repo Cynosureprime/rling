@@ -30,7 +30,7 @@ The performance of rling is impressive (this done on a Power8 system with 80 cor
 
 ## Technologies
 * Dynamic sizing\
-rling dynamically sizes the memory to be appropriate for the file.  By not having compiled-in limits for things like line lengths for theinput lines, users are able to focus on novel use cases for the program.
+rling dynamically sizes the memory to be appropriate for the file.  By not having compiled-in limits for things like line lengths for the input lines, users are able to focus on novel use cases for the program.
 * Hashing with xxHash\
 xxHash is a great new hashing method - its very fast and portable.  By combining a dynamic (overridable) hash table with an excellent hash function, performance was accelerated greatly.  Also, because hash tables are sized dynamically, there is no need to guess "optimal" hash sizes.
 * Multi threaded Binary searches and sorts\
