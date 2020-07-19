@@ -99,9 +99,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.29 2020/07/19 16:22:50 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.30 2020/07/19 20:07:24 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.30  2020/07/19 20:07:24  dlr
+ * Make error messages more verbox
+ *
  * Revision 1.29  2020/07/19 16:22:50  dlr
  * Minor typo
  *
@@ -1271,6 +1274,7 @@ errexit:
     ReadBuf1 = new_lock(0);
     if (!Readbuf || !Readindex || !WUList || !Jobs || !FreeWaiting || !WorkWaiting || !WUWaiting || !Currem_lock || !ReadBuf0 || !ReadBuf1 || !Common_lock) {
 	fprintf(stderr,"Can't allocate space for jobs\n");
+	fprintf(stderr,"This means that you don't have enough memory available to even\nstart processing.  Please make more ram available.\n");
 	exit(1);
     }
     WorkTail = &WorkHead;
@@ -1325,6 +1329,7 @@ errexit:
 	Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
 	if (!Fileinmem) {
 	    fprintf(stderr,"Can't allocation %"PRIu64" for read buffer\n",RC);
+	    fprintf(stderr,"This means we were able to read %"PRIu64" bytes of the input file\nbut that's not the end.\nMake more ram available, or decrease the size of the input file\n",filesize);
 	    exit(1);
 	}
     }
@@ -1355,6 +1360,7 @@ errexit:
     Sortlist = calloc(Estline,sizeof(char *));
     if (!Sortlist) {
 	fprintf(stderr,"Can't allocate %s bytes for sortlist\n",commify(Estline*8));
+	fprintf(stderr,"This means we were able to read all %"PRIu64" bytes of\nthe input file, but have no memory left to build the sort table.\nMake more ram available, or decrease the size of the input file\n",filesize);
 	exit(1);
     }
 
@@ -1381,6 +1387,7 @@ errexit:
 		    Sortlist = realloc(Sortlist,(Estline+16) * sizeof(char *));
 		    if (!Sortlist) {
 			fprintf(stderr,"Could not re-allocate for Sortlist\n");
+			fprintf(stderr,"This means we read all %"PRIu64"bytes of the input file\nbut we ran out of memory allocating for the sort list\nMake more memory available, or decrease the size of the input file\n",filesize);
 			exit(1);
 		    }
 		}
@@ -1427,6 +1434,7 @@ errexit:
     Sortlist = realloc(Sortlist,(Line+16) * sizeof(char *));
     if (!Sortlist) {
 	fprintf(stderr,"Final Sortlist shrink failed\n");
+	fprintf(stderr,"This means we read all %"PRIu64" bytes of the input file,\nand were able to create the sortlist for all %"PRIu64" lines we found\nLikely, there is a bug in the program\n",filesize,Line);
 	exit(1);
     }
     Sortlist[Line] = NULL;
@@ -1436,6 +1444,7 @@ errexit:
 	Common = calloc((filesize+64)/64,sizeof(uint64_t));
 	if (!Common || !Common_lock) {
 	    fprintf(stderr,"Could not allocate space for common array\n");
+	    fprintf(stderr,"Make more memory available, or reduce size of input file\n");
 	    exit(1);
 	}
     }
