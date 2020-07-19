@@ -1,5 +1,5 @@
 # rling - a better rli
-> rling is similar to the rli utility included with Hashcat, but much, much faster
+> rling is similar to the rli utility found in [hashcat-utils](https://github.com/hashcat/hashcat-utils), but much, much faster
 
 ## Table of contents
 * [General info](#general-info)
