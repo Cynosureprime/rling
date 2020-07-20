@@ -99,9 +99,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.31 2020/07/20 02:45:24 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.32 2020/07/20 16:13:05 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.32  2020/07/20 16:13:05  dlr
+ * Minor wording change on error message
+ *
  * Revision 1.31  2020/07/20 02:45:24  dlr
  * Minor typo, improve stat in early read abort.
  *
@@ -1277,7 +1280,7 @@ errexit:
     ReadBuf1 = new_lock(0);
     if (!Readbuf || !Readindex || !WUList || !Jobs || !FreeWaiting || !WorkWaiting || !WUWaiting || !Currem_lock || !ReadBuf0 || !ReadBuf1 || !Common_lock) {
 	fprintf(stderr,"Can't allocate space for jobs\n");
-	fprintf(stderr,"This means that you don't have enough memory available to even\nstart processing.  Please make more ram available.\n");
+	fprintf(stderr,"This means that you don't have enough memory available to even\nstart processing.  Please make more memory available.\n");
 	exit(1);
     }
     WorkTail = &WorkHead;
@@ -1331,7 +1334,7 @@ errexit:
 	Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
 	if (!Fileinmem) {
 	    fprintf(stderr,"Can't get %"PRIu64" more bytes for read buffer\n",(uint64_t)MAXCHUNK);
-	    fprintf(stderr,"This means we were able to read %"PRIu64" bytes of the input file\nbut that's not the end of the file.\nMake more ram available, or decrease the size of the input file\n",filesize);
+	    fprintf(stderr,"This means that part (%"PRIu64" bytes) of the input file\nread ok, but that's not the end of the file.\nMake more memory available, or decrease the size of the input file\n",filesize);
 	    exit(1);
 	}
     }
@@ -1340,6 +1343,7 @@ errexit:
     Fileinmem = realloc(Fileinmem,filesize + 16);
     if (!Fileinmem) {
 	fprintf(stderr,"Could not shrink memory buffer\n");
+	fprintf(stderr,"Probably a bug in the program\n");
 	exit(1);
     }
     fclose(fi);
@@ -1362,7 +1366,7 @@ errexit:
     Sortlist = calloc(Estline,sizeof(char *));
     if (!Sortlist) {
 	fprintf(stderr,"Can't allocate %s bytes for sortlist\n",commify(Estline*8));
-	fprintf(stderr,"This means we were able to read all %"PRIu64" bytes of\nthe input file, but have no memory left to build the sort table.\nMake more ram available, or decrease the size of the input file\n",filesize);
+	fprintf(stderr,"All %"PRIu64" bytes of the input file read ok, but there is\nno memory left to build the sort table.\nMake more memory available, or decrease the size of the input file\n",filesize);
 	exit(1);
     }
 
