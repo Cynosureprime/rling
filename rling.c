@@ -99,9 +99,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.30 2020/07/19 20:07:24 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.31 2020/07/20 02:45:24 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.31  2020/07/20 02:45:24  dlr
+ * Minor typo, improve stat in early read abort.
+ *
  * Revision 1.30  2020/07/19 20:07:24  dlr
  * Make error messages more verbox
  *
@@ -1317,8 +1320,7 @@ errexit:
     }
     Line = 0;
 
-    RC = MAXCHUNK;
-    Fileinmem = malloc(RC + 16);
+    Fileinmem = malloc(MAXCHUNK + 16);
     fprintf(stderr,"Reading \"%s\"...",argv[0]);fflush(stderr);
     for (filesize = 0; !feof(fi); ) {
 	readsize = fread(&Fileinmem[filesize],1,MAXCHUNK,fi);
@@ -1328,8 +1330,8 @@ errexit:
 	filesize += readsize;
 	Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
 	if (!Fileinmem) {
-	    fprintf(stderr,"Can't allocation %"PRIu64" for read buffer\n",RC);
-	    fprintf(stderr,"This means we were able to read %"PRIu64" bytes of the input file\nbut that's not the end.\nMake more ram available, or decrease the size of the input file\n",filesize);
+	    fprintf(stderr,"Can't get %"PRIu64" more bytes for read buffer\n",(uint64_t)MAXCHUNK);
+	    fprintf(stderr,"This means we were able to read %"PRIu64" bytes of the input file\nbut that's not the end of the file.\nMake more ram available, or decrease the size of the input file\n",filesize);
 	    exit(1);
 	}
     }
