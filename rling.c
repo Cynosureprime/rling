@@ -101,9 +101,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.34 2020/07/21 06:22:10 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.35 2020/07/21 06:48:58 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.35  2020/07/21 06:48:58  dlr
+ * Make -v mode the default.  Will re-use -v later for debug
+ *
  * Revision 1.34  2020/07/21 06:22:10  dlr
  * Fix poor linecount performance, add -c mode support for -f
  *
@@ -1527,7 +1530,11 @@ errexit:
 		exit(1);
 	    }
 	}
-	fprintf(stderr,"%"PRIu64" bytes total\n",filesize);
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"%"PRIu64" bytes total in %.4f seconds\n",filesize,wtime);
+	current_utc_time(&starttime);
 	
 	Fileinmem = realloc(Fileinmem,filesize + 16);
 	if (!Fileinmem) {
@@ -1536,13 +1543,6 @@ errexit:
 	    exit(1);
 	}
 	fclose(fi);
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Read took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
 
 	Fileinmem[filesize] = '\n';
 	Fileend = &Fileinmem[filesize];
@@ -1632,7 +1632,11 @@ errexit:
 	    exit(1);
 	}
 	Sortlist[Line] = NULL;
-	fprintf(stderr,"%c%c%c%cFound %"PRIu64" line%s\n",8,8,8,8,(uint64_t)Line,(Line==1)?"":"s");
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"%c%c%c%cFound %"PRIu64" line%s in %.4f seconds\n",8,8,8,8,(uint64_t)Line,(Line==1)?"":"s",wtime);
+	current_utc_time(&starttime);
 	Line_global = Line;
 	if (DoCommon) {
 	    Common = calloc((filesize+64)/64,sizeof(uint64_t));
@@ -1647,13 +1651,6 @@ errexit:
 	    WorkUnitLine =  WorkUnitSize * (filesize/Line);
 	    if (WorkUnitLine > filesize)
 		WorkUnitLine = filesize;
-	}
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Linecount took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
 	}
 	RC = (uint64_t)&Fileinmem[0];
 	RC |= (uint64_t)&Fileinmem[filesize];
@@ -1757,7 +1754,11 @@ errexit:
 	fprintf(stderr,"%"PRIu64" bytes total\nCounting lines...     ",ftell(fi));
 	fclose(fi);
 
-	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global);fflush(stderr);
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines) in %.4f seconds\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global,wtime);fflush(stderr);
+	current_utc_time(&starttime);
 	memsize = MaxMem + BLOOMSIZE/8 + MAXCHUNK;
 	if (DoCommon) {
 	    Common = calloc(Line/64+16,sizeof(uint64_t));
@@ -1767,13 +1768,6 @@ errexit:
 		fprintf(stderr,"Make more memory available, or reduce size of input file\n");
 		exit(1);
 	    }
-	}
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Read took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
 	}
     }
 
@@ -1827,32 +1821,27 @@ errexit:
 	    wait_for(FreeWaiting,TO_BE,Maxt);
 	    release(FreeWaiting);
 
-	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global);fflush(stderr);
-	    if (DoDebug) {
-		current_utc_time(&curtime);
-		wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-		wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-		fprintf(stderr,"Hash table creation took %.4f seconds\n",wtime);
-		current_utc_time(&starttime);
-	    }
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines) in %.4f seconds\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global,wtime);fflush(stderr);
+	    current_utc_time(&starttime);
 
 	    fprintf (stderr,"Occupancy is %"PRIu64"/%"PRIu64" %.04f%%, Maxdepth=%"PRIu64"\n",(uint64_t)Occ_global,HashSize ,(double)(Occ_global)*100.0 / (double)(HashSize),Maxdepth_global);
 	   break;
 
     	case 1:
-	    fprintf(stderr,"Sorting...\n");
+	    fprintf(stderr,"Sorting...");fflush(stderr);
 	    WorkUnitLine = Line / Maxt;
 	    if (WorkUnitLine < LINELIMIT)
 		WorkUnitLine = LINELIMIT;
 	    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
 	    qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
-	    if (DoDebug) {
-		current_utc_time(&curtime);
-		wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-		wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-		fprintf(stderr,"Primary sort took %.4f seconds\n",wtime);
-		current_utc_time(&starttime);
-	    }
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr," took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
 	    thisline = Sortlist[0];
 	    Unique_global = Line;
 	    Currem = 0;
@@ -1890,14 +1879,11 @@ errexit:
 		release(FreeWaiting);
 	    }
 	    
-	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,Unique_global,Currem_global);fflush(stderr);
-	    if (Dedupe && DoDebug) {
-		current_utc_time(&curtime);
-		wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-		wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-		fprintf(stderr,"Deduplication took %.4f seconds\n",wtime);
-		current_utc_time(&starttime);
-	    }
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines) in %.4f seconds\n",8,8,8,8,Unique_global,Currem_global,wtime);fflush(stderr);
+	    current_utc_time(&curtime);
 	    break;
 
 	case 2:
@@ -1992,25 +1978,19 @@ errexit:
 	fclose(fi);
 	if (Unique_global <= Totrem) break;
     }
-    fprintf(stderr,"\n%s total line%s %s\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed");
-
-    if (DoDebug) {
+    current_utc_time(&curtime);
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+    fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
+    current_utc_time(&starttime);
+    if (ProcMode == 1) {
+	fprintf(stderr,"Final sort ");fflush(stdout);
+	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem); 
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	fprintf(stderr,"%s process took %.4f seconds\n",(DoCommon)?"Common":"Removal",wtime);
+	fprintf(stderr,"in %.4f seconds\n",wtime);
 	current_utc_time(&starttime);
-    }
-    if (ProcMode == 1) {
-	fprintf(stderr,"Final sort\n");
-	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem); 
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Final sort took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
     }
 
     if (strcmp(argv[1],"stdout") == 0) {
@@ -2067,13 +2047,11 @@ errexit:
 		exit(1);
 	    }
 	}
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
+	current_utc_time(&starttime);
 	leveldb_iter_destroy(dbiter);
 	leveldb_close(db);
 	leveldb_destroy_db(ldbopt,DBNAME,&err);
@@ -2093,13 +2071,6 @@ errexit:
 	leveldb_iter_destroy(dbiter);
 	leveldb_close(dbo);
 	leveldb_destroy_db(ldboutopt,DBOUT,&err);
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Write output took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
     } else {
         fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
 	if (DoCommon) {
@@ -2157,16 +2128,12 @@ errexit:
 	    possess(Common_lock);
 	    release(Common_lock);
 	}
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Write process took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
     }
     fclose(fo);
-    fprintf(stderr,"\nWrote %s lines\n",commify(Write_global));
+    current_utc_time(&curtime);
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+    fprintf(stderr,"\nWrote %s lines in %.4f seconds\n",commify(Write_global),wtime);
 
     if (Workthread) {
 	possess(FreeWaiting);
