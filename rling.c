@@ -13,6 +13,8 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <leveldb/c.h>
+
 #include "yarn.h"
 
 /*
@@ -62,11 +64,11 @@
  * lines matching the lines in file1 and file2, then writes the result to
  * outfile.
  *
- * rling infile infile /dev/null (or nul: on Windows)
+ * rling infile infile
  * Reads infile, removes duplicate lines, and writes the output back to
  * infile when done.
  *
- * rling -b infile infile /dev/null 
+ * rling -b infile infile
  * Same as above, but uses binary search instead, to reduce memory usage.
  *
  * rling -bc infile outcommon file1 file2
@@ -99,9 +101,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.32 2020/07/20 16:13:05 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.33 2020/07/21 02:32:44 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.33  2020/07/21 02:32:44  dlr
+ * added -f option to use filesystem instead of memory to resolve duplicates.
+ * Uses leveldb, and performance is... ok.
+ *
  * Revision 1.32  2020/07/20 16:13:05  dlr
  * Minor wording change on error message
  *
@@ -216,10 +222,13 @@ extern void qsort_mt();
 
 
 /* After LINELIMIT lines, threads kick in */
-
 /* Maximume line length now 4gigabytes */
 #define LINELIMIT 100000
 #define MEMCHUNK (1024*1000+16)
+
+/* Bloom filter size in bits */
+#define BLOOMSIZE (1LL << 30)
+#define BLOOMMASK ((BLOOMSIZE/8)-1)
 
 #define MAXCHUNK (50*1024*1024)
 #define MAXLINE (((MAXCHUNK/2)-16)/2)
@@ -240,13 +249,24 @@ struct WorkUnit {
     uint64_t ssize,count,start,end;
 } *WUList;
 
+struct DBSort {
+    uint64_t line,len;
+    char *key;
+};
+
 struct JOB {
     struct JOB *next;
     uint64_t start,end;
     int startline, numline;
     char *readbuf, *fn;
+    leveldb_t *db;
+    leveldb_options_t *ldbopt;
+    leveldb_readoptions_t *ldbreadopt;
+    leveldb_writeoptions_t *ldbwopt;
     struct WorkUnit *wu;
     struct LineInfo *readindex;
+    struct DBSort *DBSort;
+    int dbsize, readsize;
     FILE *fo;
     int func;
 } *Jobs;
@@ -258,6 +278,8 @@ struct JOB {
 #define JOB_FINDHASH 4
 #define JOB_GENHASH 5
 #define JOB_WRITE 6
+#define JOB_BUILDDB 7
+#define JOB_FINDDB 8
 #define JOB_DONE 99
 
 struct JOB *FreeHead, **FreeTail;
@@ -273,8 +295,14 @@ uint64_t Maxdepth_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
 int Maxt, Workthread;
 int _dowildcard = -1; /* enable wildcard expansion for Windows */
-#define MDXMAXPATHLEN 5000
 
+#ifdef MAXPATHLEN
+#define MDXMAXPATHLEN (MAXPATHLEN)
+#else
+#define MDXMAXPATHLEN 5000
+#endif
+
+char TempPath[MDXMAXPATHLEN+16];
 
 
 char *Fileinmem, *Fileend;
@@ -330,8 +358,9 @@ struct Linelist **HashLine;
 
 int Dedupe = 1;
 int DoCommon = 0;
-uint64_t *Common;
+uint64_t *Common, *Bloom;
 #define Commonset(offset) {__sync_or_and_fetch(&Common[(uint64_t)(offset)/64],(uint64_t)1L << ((uint64_t)(offset) & 0x3f)); }
+#define Bloomset(offset) (__sync_fetch_and_or(&Bloom[(uint64_t)(offset)/64],(uint64_t)1L << ((uint64_t)(offset) & 0x3f)) & ((uint64_t)1L <<((uint64_t)(offset) & 0x3f)))
 
 /*
  * MarkD(pointer to char*, 64 bit value)
@@ -565,7 +594,14 @@ int comp3(const void *a, const void *b) {
     return(0);
 }
 
+int comp4(void *v, const char *a, size_t alen, const char *b, size_t blen) {
+    uint64_t a1 = *(uint64_t *)a;
+    uint64_t b1 = *(uint64_t *)b;
+    return (a1-b1);
+}
 
+void comp_destruct(void *a){return;}
+const char *comp_name(void *a){return("comp uint64_t");}
 
 /*
  * MDXALIGN forces the process to start on an appropriate boundary.  Windows
@@ -635,6 +671,8 @@ MDXALIGN void procjob(void *dummy) {
     uint64_t x, unique, occ, rem,thisnum, crc, index, j, RC, COM, thisend;
     int64_t llen, maxdepth;
     int res, curline, numline, ch, delflag;
+    size_t DBlen;
+    char *err;
 
     while (1) {
         possess(WorkWaiting);
@@ -963,6 +1001,74 @@ MDXALIGN void procjob(void *dummy) {
 		twist(Common_lock,BY, +1);
 		break;
 
+	    case JOB_BUILDDB:
+		unique = rem = 0;
+		numline = 0;
+		err = NULL;
+		index = job->end + job->startline;
+		for (curline=job->startline; numline<job->numline; curline++,numline++, index++) {
+		    key = &job->readbuf[job->readindex[curline].offset];
+		    ch = job->readindex[curline].len;
+		    crc = XXH3_64bits(key,ch);
+		    Bloomset((crc & BLOOMMASK));
+		    possess(Common_lock);
+		    newline = leveldb_get(job->db,job->ldbreadopt,key,ch,&DBlen,&err);
+		    if (err)  {
+			fprintf(stderr,"DB read error %s\n",err);
+			exit(1);
+		    }
+		    if (newline || DBlen) {
+			if (newline) leveldb_free(newline);
+			rem++;
+		    } else {
+		 	unique++;
+			leveldb_put(job->db,job->ldbwopt,key,ch,(char *)&index,sizeof(index),&err);
+			if (err) {
+			    fprintf(stderr,"Database write error\nOut of disk space?\n%s\n",err);
+			    exit(1);
+			}
+		    }
+		    release(Common_lock);
+		}
+		if (job->readbuf == Readbuf) {
+		    possess(ReadBuf0);
+		    twist(ReadBuf0,BY, -1);
+		} else {
+		    possess(ReadBuf1);
+		    twist(ReadBuf1,BY, -1);
+		}
+		__sync_add_and_fetch(&Currem_global, rem);
+		__sync_add_and_fetch(&Unique_global, unique);
+		break;
+
+	    case JOB_FINDDB:
+		rem = 0;
+		numline = 0;
+	        for (curline = job->startline; numline < job->numline; curline++,numline++) {
+  		    key = &job->readbuf[job->readindex[curline].offset];
+		    ch = job->readindex[curline].len;
+		    crc = XXH3_64bits(key,ch);
+		    if (Bloom[(crc & BLOOMMASK)/64] & ((uint64_t)1L<<(crc & 0x3f))) {
+			leveldb_delete(job->db,job->ldbwopt,key,ch,&err);
+			if (err) {
+			    fprintf(stderr,"DB Delete error\n%s\n",err);
+			    exit(1);
+			}
+			rem++;
+		    }
+		}
+		if (rem) {
+		    __sync_add_and_fetch(&Currem_global,rem);
+		}
+		if (job->readbuf == Readbuf) {
+		    possess(ReadBuf0);
+		    twist(ReadBuf0,BY, -1);
+		} else {
+		    possess(ReadBuf1);
+		    twist(ReadBuf1,BY, -1);
+		}
+		break;
+
 	    default:
 	        fprintf(stderr,"Unknown job function: %d\n",job->func);
 		exit(1);
@@ -1149,11 +1255,11 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 int main(int argc, char **argv) {
     struct timespec starttime,curtime;
     double wtime;
-    int64_t llen;
+    int64_t llen, MaxMem;
     uint64_t Line, Estline,  RC, Totrem;
     uint64_t work,curpos, thisnum, Currem, mask;
     struct Linelist *cur, *next;
-    int ch,  x, y, progress, Dobin, Hidebit, last, DoDebug, forkelem;
+    int ch,  x, y, progress, Hidebit, last, DoDebug, forkelem, ProcMode;
     int ErrCheck;
     int curline, numline, Linecount;
     char *readbuf;
@@ -1167,12 +1273,20 @@ int main(int argc, char **argv) {
     struct WorkUnit *wu, *wulast;
     struct stat sb1;
     char *linein, *newline, **sorted, *thisline, *eol;
+    leveldb_t *db,*dbo;
+    leveldb_options_t *ldbopt;
+    leveldb_readoptions_t *ldbreadopt;
+    leveldb_writeoptions_t *ldbwopt;
+    char *err,DBNAME[MDXMAXPATHLEN*2],DBOUT[MDXMAXPATHLEN*2];
 #ifndef _AIX
     struct option longopt[] = {
 	{NULL,0,NULL,0}
     };
 #endif
    
+    MaxMem = MAXCHUNK;
+    err = NULL;
+    strcpy(TempPath,".");
     ErrCheck = 1;
     DoDebug = 0;
     Maxdepth_global = 0;
@@ -1180,13 +1294,13 @@ int main(int argc, char **argv) {
     last = 99;
     mask = 0xffff;
 
-    Hidebit = Dobin = DoCommon = 0;
+    ProcMode = Hidebit =  DoCommon = 0;
     Maxt = get_nprocs();
     current_utc_time(&starttime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?hbicdnvt:p:")) != -1) {
+    while ((ch = getopt(argc, argv, "?hbficdnvt:p:T:M:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?hbicdnvt:p:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?hbficdnvt:p:T:M:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -1197,21 +1311,28 @@ errexit:
 		while (*linein++ != ' ');
 		fprintf(stderr,"rling version: %s\n\n",linein);
 		fprintf(stderr,"rling - remove matching lines from a file\n");
-		fprintf(stderr,"rling input output remfil1 remfile2...\n\n");
+		fprintf(stderr,"rling input output [remfil1 remfile2 ...]\n\n");
 		fprintf(stderr,"\t-i\t\tIgnore any error/missing files on remove list\n");
 		fprintf(stderr,"\t-d\t\tRemoves duplicate lines from input (on by default)\n");
 		fprintf(stderr,"\t-n\t\tDo not remove duplicate lines from input\n");
+		fprintf(stderr,"\t-c\t\tOutput lines common to input and remove files\n");
 		fprintf(stderr,"\t-t number\tNumber of threads to use\n");
 		fprintf(stderr,"\t-p prime\tForce size of hash table\n");
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
-		fprintf(stderr,"\t-c\t\tOutput lines common to input and remove files\n");
+		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory\n");
+		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
+		fprintf(stderr,"\t-T path\tDirectory to store temp files in\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
 		fprintf(stderr,"\n\tstdin and stdout can be used in the place of any filename\n");
 		exit(1);
 		break;
 
 	    case 'b':
-	        Dobin = 1;
+	        ProcMode = 1;
+		break;
+
+	    case 'f':
+		ProcMode = 2;
 		break;
 
 	    case 'c':
@@ -1239,6 +1360,49 @@ errexit:
 		}
 	        break;
 
+	    case 'M':
+	    	RC = atol(optarg);
+		if (strlen(optarg)) {
+		    ch = optarg[strlen(optarg)-1];
+		    switch (ch) {
+		        case 'k':
+			case 'K':
+			    RC *= 1024L;
+			    break;
+			case 'm':
+			case 'M':
+			    RC *= 1024L*1024L;
+			    break;
+			case 'G':
+			case 'g':
+			    RC *= 1024L*1024L*1024L;
+			    break;
+			default:
+			    break;
+		    }
+		}
+		if (RC <64*1024) {
+		    fprintf(stderr,"%"PRIu64" bytes isn't going to be very effective\nTry using more than 64k\n",RC);
+		}
+		fprintf(stderr,"Memory for cache set to %"PRIu64" bytes\n",RC);
+		MaxMem = RC;
+		linein = malloc(MaxMem);
+		if (!linein) {
+		    fprintf(stderr,"but allocation for that much failed.  Try using a smaller amount\n");
+		    exit(1);
+		}
+		free(linein);
+		break;
+
+
+	    case 'T':
+	        if (strlen(optarg) > MDXMAXPATHLEN) {
+		    fprintf(stderr,"The path is too long - make it shorter.\n");
+		    exit(1);
+		}
+		strcpy(TempPath,optarg);
+		fprintf(stderr,"Temporary file path: %s\n",TempPath);
+		break;
 	    case 't':
 	        x = atoi(optarg);
 		if (x < 1 || x > 32768) {
@@ -1256,6 +1420,15 @@ errexit:
     argc -= optind;
     argv += optind;
 
+    sprintf(DBNAME,"%s/%s%d.db",TempPath,"rling",getpid());
+    sprintf(DBOUT,"%s/%s%d.db",TempPath,"rlingo",getpid());
+
+    if (ProcMode == 2 && (Dedupe == 0 || DoCommon)) {
+	if (Dedupe = 0) fprintf(stderr,"The -n switch cannot be used with -f\n");
+	if (DoCommon) fprintf(stderr,"The -c switch cannot be used with -f\n");
+	fprintf(stderr,"Unfortunately, when using file mode, deduplication is required\nand common (-c) cannot be used.");
+	exit(1);
+    }
     if (ErrCheck) {
         for (x=2; x<argc; x++) {
 	    if (strcmp(argv[x],"stdin") == 0 || strcmp(argv[x],"stdout") == 0)
@@ -1305,10 +1478,11 @@ errexit:
 	Jobs[x].wu = &WUList[x];
     }
 
-    if (argc < 3) {
-        fprintf(stderr,"Need at least 3 files to process.\n\n");
+    if (argc < 2) {
+        fprintf(stderr,"Need at least an input and an output file to process.\n");
 	goto errexit;
     }
+
     if (strcmp(argv[0],"stdin") == 0) {
 	fi = stdin;
 #ifdef _WIN32
@@ -1317,194 +1491,270 @@ errexit:
     } else 
 	fi = fopen(argv[0],"rb");
     if (!fi) {
-        fprintf(stderr,"Can't open:");
+	fprintf(stderr,"Can't open:");
 	perror(argv[0]);
 	exit(1);
     }
-    Line = 0;
-
-    Fileinmem = malloc(MAXCHUNK + 16);
     fprintf(stderr,"Reading \"%s\"...",argv[0]);fflush(stderr);
-    for (filesize = 0; !feof(fi); ) {
-	readsize = fread(&Fileinmem[filesize],1,MAXCHUNK,fi);
-	if (readsize <= 0) {
-	    if (feof(fi) || readsize <0) break;
-	}
-	filesize += readsize;
-	Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
-	if (!Fileinmem) {
-	    fprintf(stderr,"Can't get %"PRIu64" more bytes for read buffer\n",(uint64_t)MAXCHUNK);
-	    fprintf(stderr,"This means that part (%"PRIu64" bytes) of the input file\nread ok, but that's not the end of the file.\nMake more memory available, or decrease the size of the input file\n",filesize);
-	    exit(1);
-	}
-    }
-    fprintf(stderr,"%"PRIu64" bytes total\n",filesize);
-    
-    Fileinmem = realloc(Fileinmem,filesize + 16);
-    if (!Fileinmem) {
-	fprintf(stderr,"Could not shrink memory buffer\n");
-	fprintf(stderr,"Probably a bug in the program\n");
-	exit(1);
-    }
-    fclose(fi);
-    if (DoDebug) {
-	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	fprintf(stderr,"Read took %.4f seconds\n",wtime);
-	current_utc_time(&starttime);
-    }
-
-    Fileinmem[filesize] = '\n';
-    Fileend = &Fileinmem[filesize];
-    Filesize = filesize;
-    fprintf(stderr,"Counting lines...    ");fflush(stderr);
-
-    thisline = Fileinmem;
-    Estline = filesize / 8;
-    if (Estline <10) Estline = 10;
-    Sortlist = calloc(Estline,sizeof(char *));
-    if (!Sortlist) {
-	fprintf(stderr,"Can't allocate %s bytes for sortlist\n",commify(Estline*8));
-	fprintf(stderr,"All %"PRIu64" bytes of the input file read ok, but there is\nno memory left to build the sort table.\nMake more memory available, or decrease the size of the input file\n",filesize);
-	exit(1);
-    }
-
+    Line = 0;
     WorkUnitLine =  WorkUnitSize *8;
     if (WorkUnitLine > filesize)
-        WorkUnitLine = filesize;
+	WorkUnitLine = filesize;
 
-    Line = 0;
-    launch(filljob,NULL);
-    for (curpos = 0; curpos < filesize; ) {
-	possess(WUWaiting);
-	wait_for(WUWaiting, NOT_TO_BE, 0);
-	wulast = NULL;
-	for (x=0,ch = 0,wu = WUHead; wu; wulast = wu, wu = wu->next) {
-		x++;
-	    if (wu->start == curpos) {
-		if ((Line+wu->count) >= (Estline-2)) {
-		    if (filesize) 
-			RC = Estline + (((filesize - curpos)*Estline)/filesize);
-		    else
-			RC = Estline + wu->count;
-		    if (RC < (Line+wu->count)) RC = Line+wu->count;
-		    Estline = RC;
-		    Sortlist = realloc(Sortlist,(Estline+16) * sizeof(char *));
-		    if (!Sortlist) {
-			fprintf(stderr,"Could not re-allocate for Sortlist\n");
-			fprintf(stderr,"This means we read all %"PRIu64"bytes of the input file\nbut we ran out of memory allocating for the sort list\nMake more memory available, or decrease the size of the input file\n",filesize);
-			exit(1);
-		    }
-		}
-		if (wu->count) {
-		    memcpy(&Sortlist[Line],wu->Sortlist,wu->count*sizeof(char *));
-		    Line += wu->count;
-		}
-		curpos = wu->end;
-		if (wu == WUHead) {
-		    WUHead = wu->next;
-		} else {
-		    if (wulast != NULL) {
-			wulast->next = wu->next;
-		    }
-		}
-		if (WUTail == &(wu->next)) {
-		   if (wulast == NULL)
-			WUTail = &WUHead;
-		   else 
-		        WUTail = &(wulast->next);
-		}
-		wu->next = NULL;
-		possess(wu->wulock);
-		twist(wu->wulock,BY,-1);
-		ch = -1;
-		break;
+    if (ProcMode < 2) {
+	Fileinmem = malloc(MAXCHUNK + 16);
+	for (filesize = 0; !feof(fi); ) {
+	    readsize = fread(&Fileinmem[filesize],1,MAXCHUNK,fi);
+	    if (readsize <= 0) {
+		if (feof(fi) || readsize <0) break;
+	    }
+	    filesize += readsize;
+	    Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
+	    if (!Fileinmem) {
+		fprintf(stderr,"Can't get %"PRIu64" more bytes for read buffer\n",(uint64_t)MAXCHUNK);
+		fprintf(stderr,"This means that part (%"PRIu64" bytes) of the input file\nread ok, but that's not the end of the file.\nMake more memory available, or decrease the size of the input file\n",filesize);
+		exit(1);
 	    }
 	}
-	if (ch == 0) {
-	    last = peek_lock(WUWaiting);
-	    wait_for(WUWaiting, NOT_TO_BE,last);
-	}
-	twist(WUWaiting, BY, ch);
-    }
-    possess(Common_lock);
-    wait_for(Common_lock, TO_BE, 1);
-    twist(Common_lock, BY, -1);
-    possess(FreeWaiting);
-    if (peek_lock(FreeWaiting) != Maxt) {
-	fprintf(stderr,"Line count failure - free waiting is %ld\n",peek_lock(FreeWaiting));
-        wait_for(FreeWaiting, TO_BE,Maxt);
-    }
-    release(FreeWaiting);
-    Sortlist = realloc(Sortlist,(Line+16) * sizeof(char *));
-    if (!Sortlist) {
-	fprintf(stderr,"Final Sortlist shrink failed\n");
-	fprintf(stderr,"This means we read all %"PRIu64" bytes of the input file,\nand were able to create the sortlist for all %"PRIu64" lines we found\nLikely, there is a bug in the program\n",filesize,Line);
-	exit(1);
-    }
-    Sortlist[Line] = NULL;
-    fprintf(stderr,"%c%c%c%cFound %"PRIu64" line%s\n",8,8,8,8,(uint64_t)Line,(Line==1)?"":"s");
-    Line_global = Line;
-    if (DoCommon) {
-	Common = calloc((filesize+64)/64,sizeof(uint64_t));
-	if (!Common || !Common_lock) {
-	    fprintf(stderr,"Could not allocate space for common array\n");
-	    fprintf(stderr,"Make more memory available, or reduce size of input file\n");
+	fprintf(stderr,"%"PRIu64" bytes total\n",filesize);
+	
+	Fileinmem = realloc(Fileinmem,filesize + 16);
+	if (!Fileinmem) {
+	    fprintf(stderr,"Could not shrink memory buffer\n");
+	    fprintf(stderr,"Probably a bug in the program\n");
 	    exit(1);
 	}
-    }
-
-    if (Line) {
-	WorkUnitLine =  WorkUnitSize * (filesize/Line);
-	if (WorkUnitLine > filesize)
-	    WorkUnitLine = filesize;
-    }
-    if (DoDebug) {
-	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	fprintf(stderr,"Linecount took %.4f seconds\n",wtime);
-	current_utc_time(&starttime);
-    }
-    RC = (uint64_t)&Fileinmem[0];
-    RC |= (uint64_t)&Fileinmem[filesize];
-    Hidebit = (RC & (1LL<<63)) ? 0 : 1;
-    if (Hidebit == 0) {
-	fprintf(stderr,"Can't hide the bit\n");
-	exit(1);
-    }
-    memsize = MAXCHUNK +
-	      MAXLINEPERCHUNK*2*sizeof(struct LineInfo)+32 +
-	      filesize + 
-	      Line * sizeof(char **);
-
-    if (Dobin == 0) {
-	HashSize = HashMask = 0;
-	HashPrime = 513;
-	for (x=0; Hashsizes[x].size != 0; x++) {
-	    HashPrime = Hashsizes[x].prime;
-	    if ((Line*2) < Hashsizes[x].size) break;
+	fclose(fi);
+	if (DoDebug) {
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"Read took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
 	}
-	fprintf(stderr,"Optimal HashPrime is %"PRIu64" ",HashPrime);
-	HashSize = HashPrime;
-	if (HashOpt) {
-	    fprintf(stderr,"but user requested %d",HashOpt);
-	    HashPrime = HashOpt;
-	    HashSize = HashPrime;
-	    for (work=1024; work && work != HashOpt; work *= 2);
-	    if (work == HashOpt) {
-	    	HashMask = work -1;
-		HashSize = work;
-		HashPrime = 0;
-		fprintf(stderr,"\nRequested value is a power-of-two, HashMask=%"PRIu64"x",HashMask);
+
+	Fileinmem[filesize] = '\n';
+	Fileend = &Fileinmem[filesize];
+	Filesize = filesize;
+	fprintf(stderr,"Counting lines...    ");fflush(stderr);
+
+	thisline = Fileinmem;
+	Estline = filesize / 8;
+	if (Estline <10) Estline = 10;
+	Sortlist = calloc(Estline,sizeof(char *));
+	if (!Sortlist) {
+	    fprintf(stderr,"Can't allocate %s bytes for sortlist\n",commify(Estline*8));
+	    fprintf(stderr,"All %"PRIu64" bytes of the input file read ok, but there is\nno memory left to build the sort table.\nMake more memory available, or decrease the size of the input file\n",filesize);
+	    exit(1);
+	}
+
+
+	launch(filljob,NULL);
+	for (curpos = 0; curpos < filesize; ) {
+	    possess(WUWaiting);
+	    wait_for(WUWaiting, NOT_TO_BE, 0);
+	    wulast = NULL;
+	    for (x=0,ch = 0,wu = WUHead; wu; wulast = wu, wu = wu->next) {
+		    x++;
+		if (wu->start == curpos) {
+		    if ((Line+wu->count) >= (Estline-2)) {
+			if (filesize) 
+			    RC = Estline + (((filesize - curpos)*Estline)/filesize);
+			else
+			    RC = Estline + wu->count;
+			if (RC < (Line+wu->count)) RC = Line+wu->count;
+			Estline = RC;
+			Sortlist = realloc(Sortlist,(Estline+16) * sizeof(char *));
+			if (!Sortlist) {
+			    fprintf(stderr,"Could not re-allocate for Sortlist\n");
+			    fprintf(stderr,"This means we read all %"PRIu64"bytes of the input file\nbut we ran out of memory allocating for the sort list\nMake more memory available, or decrease the size of the input file\n",filesize);
+			    exit(1);
+			}
+		    }
+		    if (wu->count) {
+			memcpy(&Sortlist[Line],wu->Sortlist,wu->count*sizeof(char *));
+			Line += wu->count;
+		    }
+		    curpos = wu->end;
+		    if (wu == WUHead) {
+			WUHead = wu->next;
+		    } else {
+			if (wulast != NULL) {
+			    wulast->next = wu->next;
+			}
+		    }
+		    if (WUTail == &(wu->next)) {
+		       if (wulast == NULL)
+			    WUTail = &WUHead;
+		       else 
+			    WUTail = &(wulast->next);
+		    }
+		    wu->next = NULL;
+		    possess(wu->wulock);
+		    twist(wu->wulock,BY,-1);
+		    ch = -1;
+		    break;
+		}
+	    }
+	    if (ch == 0) {
+		last = peek_lock(WUWaiting);
+		wait_for(WUWaiting, NOT_TO_BE,last);
+	    }
+	    twist(WUWaiting, BY, ch);
+	}
+	possess(Common_lock);
+	wait_for(Common_lock, TO_BE, 1);
+	twist(Common_lock, BY, -1);
+	possess(FreeWaiting);
+	if (peek_lock(FreeWaiting) != Maxt) {
+	    fprintf(stderr,"Line count failure - free waiting is %ld\n",peek_lock(FreeWaiting));
+	    wait_for(FreeWaiting, TO_BE,Maxt);
+	}
+	release(FreeWaiting);
+	Sortlist = realloc(Sortlist,(Line+16) * sizeof(char *));
+	if (!Sortlist) {
+	    fprintf(stderr,"Final Sortlist shrink failed\n");
+	    fprintf(stderr,"This means we read all %"PRIu64" bytes of the input file,\nand were able to create the sortlist for all %"PRIu64" lines we found\nLikely, there is a bug in the program\n",filesize,Line);
+	    exit(1);
+	}
+	Sortlist[Line] = NULL;
+	fprintf(stderr,"%c%c%c%cFound %"PRIu64" line%s\n",8,8,8,8,(uint64_t)Line,(Line==1)?"":"s");
+	Line_global = Line;
+	if (DoCommon) {
+	    Common = calloc((filesize+64)/64,sizeof(uint64_t));
+	    if (!Common || !Common_lock) {
+		fprintf(stderr,"Could not allocate space for common array\n");
+		fprintf(stderr,"Make more memory available, or reduce size of input file\n");
+		exit(1);
 	    }
 	}
-	fprintf(stderr,"\n");
 
-	memsize += sizeof(struct LineList *)*HashSize +
-		  (Line*sizeof(struct Linelist));
+	if (Line) {
+	    WorkUnitLine =  WorkUnitSize * (filesize/Line);
+	    if (WorkUnitLine > filesize)
+		WorkUnitLine = filesize;
+	}
+	if (DoDebug) {
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"Linecount took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
+	}
+	RC = (uint64_t)&Fileinmem[0];
+	RC |= (uint64_t)&Fileinmem[filesize];
+	Hidebit = (RC & (1LL<<63)) ? 0 : 1;
+	if (Hidebit == 0) {
+	    fprintf(stderr,"Can't hide the bit\n");
+	    exit(1);
+	}
+	memsize = MAXCHUNK +
+		  MAXLINEPERCHUNK*2*sizeof(struct LineInfo)+32 +
+		  filesize + 
+		  Line * sizeof(char **);
+
+	if (ProcMode == 0) {
+	    HashSize = HashMask = 0;
+	    HashPrime = 513;
+	    for (x=0; Hashsizes[x].size != 0; x++) {
+		HashPrime = Hashsizes[x].prime;
+		if ((Line*2) < Hashsizes[x].size) break;
+	    }
+	    fprintf(stderr,"Optimal HashPrime is %"PRIu64" ",HashPrime);
+	    HashSize = HashPrime;
+	    if (HashOpt) {
+		fprintf(stderr,"but user requested %d",HashOpt);
+		HashPrime = HashOpt;
+		HashSize = HashPrime;
+		for (work=1024; work && work != HashOpt; work *= 2);
+		if (work == HashOpt) {
+		    HashMask = work -1;
+		    HashSize = work;
+		    HashPrime = 0;
+		    fprintf(stderr,"\nRequested value is a power-of-two, HashMask=%"PRIu64"x",HashMask);
+		}
+	    }
+	    fprintf(stderr,"\n");
+
+	    memsize += sizeof(struct LineList *)*HashSize +
+		      (Line*sizeof(struct Linelist));
+	}
+    } else {
+	ldbopt = leveldb_options_create();
+	leveldb_options_set_create_if_missing(ldbopt,1);
+	leveldb_options_set_cache(ldbopt,leveldb_cache_create_lru(MaxMem));
+
+	db = leveldb_open(ldbopt, DBNAME, &err);
+	if (err != NULL) {
+	    fprintf(stderr,"Could not create database \"%s\"\n%s\n",DBNAME,err);
+	    exit(1);
+	}
+	ldbreadopt = leveldb_readoptions_create();
+	ldbwopt = leveldb_writeoptions_create();
+	Bloom = calloc(BLOOMSIZE/64 +8,1);
+	if (!Bloom) {
+	    fprintf(stderr,"Bloom filter could not be allocated\nMake more memory available, or use -M option to reduce cache size from\nthe current %"PRIu64" bytes\n",MaxMem);
+	    exit(1);
+	}
+	while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
+	    numline = (Linecount / Maxt);
+	    if (numline < Maxt) numline = Linecount;
+	    for (curline = 0; curline < Linecount; curline += numline) {
+		possess(FreeWaiting);
+		wait_for(FreeWaiting, NOT_TO_BE,0);
+		job = FreeHead;
+		FreeHead = job->next;
+		if (FreeHead == NULL) FreeTail = &FreeHead;
+		twist(FreeWaiting, BY, -1);
+		job->next = NULL;
+		job->func = JOB_BUILDDB;
+		job->db = db; job->ldbopt = ldbopt;
+		job->ldbreadopt = ldbreadopt; job->ldbwopt = ldbwopt;
+		job->start = 0;
+		job->end = Line;
+		job->startline = curline;
+		if ((curline + numline) > Linecount )
+		    job->numline = Linecount - curline;
+		else
+		    job->numline = numline;
+		job->readindex = readindex;
+		job->readbuf = readbuf;
+		if (readbuf == Readbuf) {
+		    possess(ReadBuf0);
+		    twist(ReadBuf0,BY,+1);
+		} else {
+		    possess(ReadBuf1);
+		    twist(ReadBuf1,BY,+1);
+		}
+		if (Workthread < Maxt) {
+		    launch(procjob,NULL);
+		    Workthread++;
+		}
+		possess(WorkWaiting);
+		*WorkTail = job;
+		WorkTail = &(job->next);
+		twist(WorkWaiting,BY,+1);
+	    }
+	    Line += Linecount;
+	}
+	possess(FreeWaiting);
+	wait_for(FreeWaiting,TO_BE,Maxt);
+	release(FreeWaiting);
+	fprintf(stderr,"%"PRIu64" bytes total\nCounting lines...     ",ftell(fi));
+	fclose(fi);
+
+	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global);fflush(stderr);
+	memsize = MaxMem + BLOOMSIZE/8 + MAXCHUNK;
+	if (DoDebug) {
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"Read took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
+	}
     }
+
+
     for (x=0 ; x < 4; x++) {
        if (memsize < Memscale[x].size) break;
     }
@@ -1513,47 +1763,38 @@ errexit:
 	 Memscale[x].name);
     
 
-    if (Dobin) {
-	fprintf(stderr,"Sorting...\n");
-	WorkUnitLine = Line / Maxt;
-	if (WorkUnitLine < LINELIMIT)
-	    WorkUnitLine = LINELIMIT;
-	forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
-	qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Primary sort took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
-	thisline = Sortlist[0];
-	Unique_global = Line;
-	Currem = 0;
-	if (Dedupe) {
-	    fprintf(stderr,"De-duplicating:     ");fflush(stderr);
-	    Unique_global = Currem_global = 0;
-	    work = 0;
-	    while (work < Line) {
+    switch (ProcMode) {
+    	case 0:
+	    HashLine = calloc(sizeof(struct Linelist *),HashSize);
+	    Linel = malloc(sizeof(struct Linelist)*(Line+2));
+
+	    if (!HashLine ||  !Linel) {
+		fprintf(stderr,"Can't allocate processing space for lines\n");
+		fprintf(stderr,"Make more memory available, or consider using -b option.\n");
+		exit(1);
+	    }
+
+	    Currem = 0;
+	    
+	    fprintf(stderr,"Processing input list...     ");fflush(stderr);
+	    curpos = (Line / Maxt);
+	    if (curpos < Maxt) curpos = Line;
+	    for (work = 0; work < Line; work += curpos) {
 		possess(FreeWaiting);
 		wait_for(FreeWaiting, NOT_TO_BE,0);
 		job = FreeHead;
 		FreeHead = job->next;
 		if (FreeHead == NULL) FreeTail = &FreeHead;
 		twist(FreeWaiting, BY, -1);
-		job->next = NULL;
-		job->func = JOB_DEDUPE;
-		job->start = work;
-		curpos = work + WorkUnitLine;
-		if (curpos > Line) curpos = Line;
-		while (curpos >0 && curpos < Line && curpos > work) {
-		    if (comp1(&Sortlist[curpos-1],&Sortlist[curpos]) == 0) 
-		    	curpos++;
-		    else
-		    	break;
+		job->next = NULL; job->func = JOB_GENHASH; job->start = work;
+		if ((work + curpos) > Line )
+		    job->end = Line;
+		else
+		    job->end = work + curpos;
+		if (Workthread < Maxt) {
+		    launch(procjob,NULL);
+		    Workthread++;
 		}
-		job->end = curpos;
-		work = curpos;
 		possess(WorkWaiting);
 		*WorkTail = job;
 		WorkTail = &(job->next);
@@ -1562,43 +1803,41 @@ errexit:
 	    possess(FreeWaiting);
 	    wait_for(FreeWaiting,TO_BE,Maxt);
 	    release(FreeWaiting);
-	}
 
-	
-	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,Unique_global,Currem_global);fflush(stderr);
-	if (Dedupe && DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Deduplication took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
-	
-	Totrem = 0; 
-	for (x=2; x < argc; x++) {
-	    Currem_global = 0;
-	    fprintf(stderr,"Removing from \"%s\"... ",argv[x]);fflush(stderr);
-	    stat(argv[x],&sb1);
-	    if (sb1.st_mode & S_IFDIR) {
-   		fprintf(stderr,"skipping directory\n");
-		continue;
+	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global);fflush(stderr);
+	    if (DoDebug) {
+		current_utc_time(&curtime);
+		wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+		wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+		fprintf(stderr,"Hash table creation took %.4f seconds\n",wtime);
+		current_utc_time(&starttime);
 	    }
-	    if (strcmp(argv[x],"stdin") == 0) {
-		fi = stdin;
-#ifdef _WIN32
-  setmode(0,O_BINARY);
-#endif
-	    } else
-		fi = fopen(argv[x],"rb");
-	    if (!fi) {
-		fprintf(stderr,"Can't open:");
-		perror(argv[x]);
-		continue;
+
+	    fprintf (stderr,"Occupancy is %"PRIu64"/%"PRIu64" %.04f%%, Maxdepth=%"PRIu64"\n",(uint64_t)Occ_global,HashSize ,(double)(Occ_global)*100.0 / (double)(HashSize),Maxdepth_global);
+	   break;
+
+    	case 1:
+	    fprintf(stderr,"Sorting...\n");
+	    WorkUnitLine = Line / Maxt;
+	    if (WorkUnitLine < LINELIMIT)
+		WorkUnitLine = LINELIMIT;
+	    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
+	    qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
+	    if (DoDebug) {
+		current_utc_time(&curtime);
+		wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+		wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+		fprintf(stderr,"Primary sort took %.4f seconds\n",wtime);
+		current_utc_time(&starttime);
 	    }
-	    while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
-		numline = (Linecount / Maxt);
- 		if (numline < Maxt) numline = Linecount;
-		for (curline = 0; curline < Linecount; curline += numline) {
+	    thisline = Sortlist[0];
+	    Unique_global = Line;
+	    Currem = 0;
+	    if (Dedupe) {
+		fprintf(stderr,"De-duplicating:     ");fflush(stderr);
+		Unique_global = Currem_global = 0;
+		work = 0;
+		while (work < Line) {
 		    possess(FreeWaiting);
 		    wait_for(FreeWaiting, NOT_TO_BE,0);
 		    job = FreeHead;
@@ -1606,52 +1845,140 @@ errexit:
 		    if (FreeHead == NULL) FreeTail = &FreeHead;
 		    twist(FreeWaiting, BY, -1);
 		    job->next = NULL;
-		    job->func = JOB_SEARCH;
-		    job->start = 0;
-		    job->end = Line;
-	            job->startline = curline;
-		    if ((curline + numline) > Linecount )
-			job->numline = Linecount - curline;
-		    else
-		        job->numline = numline;
-		    job->readindex = readindex;
-		    job->readbuf = readbuf;
-		    if (readbuf == Readbuf) {
-			possess(ReadBuf0);
-			twist(ReadBuf0,BY,+1);
-		    } else {
-			possess(ReadBuf1);
-			twist(ReadBuf1,BY,+1);
+		    job->func = JOB_DEDUPE;
+		    job->start = work;
+		    curpos = work + WorkUnitLine;
+		    if (curpos > Line) curpos = Line;
+		    while (curpos >0 && curpos < Line && curpos > work) {
+			if (comp1(&Sortlist[curpos-1],&Sortlist[curpos]) == 0) 
+			    curpos++;
+			else
+			    break;
 		    }
-		    if (Workthread < Maxt) {
-			launch(procjob,NULL);
-			Workthread++;
-		    }
+		    job->end = curpos;
+		    work = curpos;
 		    possess(WorkWaiting);
 		    *WorkTail = job;
 		    WorkTail = &(job->next);
 		    twist(WorkWaiting,BY,+1);
 		}
+		possess(FreeWaiting);
+		wait_for(FreeWaiting,TO_BE,Maxt);
+		release(FreeWaiting);
 	    }
-	    possess(FreeWaiting);
-	    wait_for(FreeWaiting, TO_BE, Maxt);
-	    release(FreeWaiting);
-	    possess(Currem_lock);
-	    fprintf(stderr,"%"PRIu64" removed\n",(uint64_t)Currem_global);
-	    Totrem += Currem_global;
-	    release(Currem_lock);
-	    fclose(fi);
-	    if (Unique_global <= Totrem) break;
-	}
-	fprintf(stderr,"\n%s total line%s removed\n",commify(Totrem),(Totrem==1)?"":"s");
+	    
+	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,Unique_global,Currem_global);fflush(stderr);
+	    if (Dedupe && DoDebug) {
+		current_utc_time(&curtime);
+		wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+		wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+		fprintf(stderr,"Deduplication took %.4f seconds\n",wtime);
+		current_utc_time(&starttime);
+	    }
+	    break;
 
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Removal process took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
+	case 2:
+	    break;
+	default:
+	    fprintf(stderr,"Unknown ProcMode=%d\n",ProcMode);
+	    exit(1);
+    }
+	
+    Totrem = 0; 
+    for (x=2; x < argc; x++) {
+	Currem_global = 0;
+	fprintf(stderr,"Removing from \"%s\"... ",argv[x]);fflush(stderr);
+	stat(argv[x],&sb1);
+	if (sb1.st_mode & S_IFDIR) {
+	    fprintf(stderr,"skipping directory\n");
+	    continue;
 	}
+	if (strcmp(argv[x],"stdin") == 0) {
+		fi = stdin;
+#ifdef _WIN32
+  setmode(0,O_BINARY);
+#endif
+	} else
+	    fi = fopen(argv[x],"rb");
+	if (!fi) {
+	    fprintf(stderr,"Can't open:");
+	    perror(argv[x]);
+	    continue;
+	}
+	while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
+	    numline = (Linecount / Maxt);
+	    if (numline < Maxt) numline = Linecount;
+	    for (curline = 0; curline < Linecount; curline += numline) {
+		possess(FreeWaiting);
+		wait_for(FreeWaiting, NOT_TO_BE,0);
+		job = FreeHead;
+		FreeHead = job->next;
+		if (FreeHead == NULL) FreeTail = &FreeHead;
+		twist(FreeWaiting, BY, -1);
+		job->next = NULL;
+		switch (ProcMode) {
+		    case 0:
+			job->func = JOB_FINDHASH;
+			break;
+		    case 1:
+			job->func = JOB_SEARCH;
+			break;
+		    case 2:
+			job->func = JOB_FINDDB;
+			job->db = db; job->ldbopt = ldbopt;
+			job->ldbreadopt = ldbreadopt;
+			job->ldbwopt = ldbwopt;
+			break;
+		    default:
+		        fprintf(stderr,"Unkown ProcMode=%d\n",ProcMode);
+			exit(1);
+		}
+		job->start = 0;
+		job->end = Line;
+		job->startline = curline;
+		if ((curline + numline) > Linecount )
+		    job->numline = Linecount - curline;
+		else
+		    job->numline = numline;
+		job->readindex = readindex;
+		job->readbuf = readbuf;
+		if (readbuf == Readbuf) {
+		    possess(ReadBuf0);
+		    twist(ReadBuf0,BY,+1);
+		} else {
+		    possess(ReadBuf1);
+		    twist(ReadBuf1,BY,+1);
+		}
+		if (Workthread < Maxt) {
+		    launch(procjob,NULL);
+		    Workthread++;
+		}
+		possess(WorkWaiting);
+		*WorkTail = job;
+		WorkTail = &(job->next);
+		twist(WorkWaiting,BY,+1);
+	    }
+	}
+	possess(FreeWaiting);
+	wait_for(FreeWaiting, TO_BE, Maxt);
+	release(FreeWaiting);
+	possess(Currem_lock);
+	fprintf(stderr,"%"PRIu64" removed\n",(uint64_t)Currem_global);
+	Totrem += Currem_global;
+	release(Currem_lock);
+	fclose(fi);
+	if (Unique_global <= Totrem) break;
+    }
+    fprintf(stderr,"\n%s total line%s removed\n",commify(Totrem),(Totrem==1)?"":"s");
+
+    if (DoDebug) {
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"Removal process took %.4f seconds\n",wtime);
+	current_utc_time(&starttime);
+    }
+    if (ProcMode == 1) {
 	fprintf(stderr,"Final sort\n");
 	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem); 
 	if (DoDebug) {
@@ -1659,137 +1986,6 @@ errexit:
 	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	    fprintf(stderr,"Final sort took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
-    } else {
-		 
-	HashLine = calloc(sizeof(struct Linelist *),HashSize);
-	Linel = malloc(sizeof(struct Linelist)*(Line+2));
-
-	if (!HashLine ||  !Linel) {
-	    fprintf(stderr,"Can't allocate processing space for lines\n");
-	    exit(1);
-	}
-	
-
-	Currem = 0;
-	
-	fprintf(stderr,"Processing input list...     ");fflush(stderr);
-	curpos = (Line / Maxt);
-	if (curpos < Maxt) curpos = Line;
-	for (work = 0; work < Line; work += curpos) {
-	    possess(FreeWaiting);
-	    wait_for(FreeWaiting, NOT_TO_BE,0);
-	    job = FreeHead;
-	    FreeHead = job->next;
-	    if (FreeHead == NULL) FreeTail = &FreeHead;
-	    twist(FreeWaiting, BY, -1);
-	    job->next = NULL; job->func = JOB_GENHASH; job->start = work;
-	    if ((work + curpos) > Line )
-		job->end = Line;
-	    else
-		job->end = work + curpos;
-	    if (Workthread < Maxt) {
-		launch(procjob,NULL);
-		Workthread++;
-	    }
-	    possess(WorkWaiting);
-	    *WorkTail = job;
-	    WorkTail = &(job->next);
-	    twist(WorkWaiting,BY,+1);
-	}
-	possess(FreeWaiting);
-	wait_for(FreeWaiting,TO_BE,Maxt);
-	release(FreeWaiting);
-
-	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global);fflush(stderr);
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Hash table creation took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	}
-
-
-
-	fprintf (stderr,"Occupancy is %"PRIu64"/%"PRIu64" %.04f%%, Maxdepth=%"PRIu64"\n",(uint64_t)Occ_global,HashSize ,(double)(Occ_global)*100.0 / (double)(HashSize),Maxdepth_global);
-
-
-
-	Totrem = 0; 
-	for (x=2; x < argc; x++) {
-	    Currem_global = 0;
-	    fprintf(stderr,"Removing from \"%s\"... ",argv[x]);fflush(stderr);
-	    stat(argv[x],&sb1);
-	    if (sb1.st_mode & S_IFDIR) {
-   		fprintf(stderr,"skipping directory\n");
-		continue;
-	    }
-	    if (strcmp(argv[x], "stdin") == 0) {
-		fi = stdin;
-#ifdef _WIN32
-  setmode(0,O_BINARY);
-#endif
-	    } else
-		fi = fopen(argv[x],"rb");
-	    if (!fi) {
-		fprintf(stderr,"Can't open:");
-		perror(argv[x]);
-		continue;
-	    }
-	    while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
-		numline = (Linecount / Maxt);
- 		if (numline < Maxt) numline = Linecount;
-		for (curline = 0; curline < Linecount; curline += numline) {
-		    possess(FreeWaiting);
-		    wait_for(FreeWaiting, NOT_TO_BE,0);
-		    job = FreeHead;
-		    FreeHead = job->next;
-		    if (FreeHead == NULL) FreeTail = &FreeHead;
-		    twist(FreeWaiting, BY, -1);
-		    job->next = NULL;
-		    job->func = JOB_FINDHASH;
-	            job->startline = curline;
-		    if ((curline + numline) > Linecount )
-			job->numline = Linecount - curline;
-		    else
-		        job->numline = numline;
-		    job->readindex = readindex;
-		    job->readbuf = readbuf;
-		    if (readbuf == Readbuf) {
-			possess(ReadBuf0);
-			twist(ReadBuf0,BY,+1);
-		    } else {
-			possess(ReadBuf1);
-			twist(ReadBuf1,BY,+1);
-		    }
-		    if (Workthread < Maxt) {
-			launch(procjob,NULL);
-			Workthread++;
-		    }
-		    possess(WorkWaiting);
-		    *WorkTail = job;
-		    WorkTail = &(job->next);
-		    twist(WorkWaiting,BY,+1);
-		}
-	    }
-	    possess(FreeWaiting);
-	    wait_for(FreeWaiting, TO_BE,Maxt);
-	    release(FreeWaiting);
-	    possess(Currem_lock);
-	    fprintf(stderr,"%"PRIu64" removed\n",(uint64_t)Currem_global);
-	    Totrem += Currem_global;
-	    release(Currem_lock);
-	    fclose(fi);
-	    if (Unique_global <= Totrem) break;
-	}
-	fprintf(stderr,"\n%s total line%s removed\n",commify(Totrem),(Totrem==1)?"":"s");
-	if (DoDebug) {
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Remove file process took %.4f seconds\n",wtime);
 	    current_utc_time(&starttime);
 	}
     }
@@ -1807,61 +2003,131 @@ errexit:
 	exit(1);
     }
     Currem = 0;
-    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-    if (DoCommon) {
-	for (curpos = 0; curpos < (filesize/64 + 1);curpos++) {
-	    if ((RC = Common[curpos])) {
-		for (x=0; RC && x < 64; x++, RC = RC >> 1) {
-		    if (RC &1) {
-			Currem++;
-			newline = &Fileinmem[curpos*64+x];
-			eol = findeol(newline,newline - Fileend);
-			if (!eol) eol = newline;
-			if (fwrite(newline,eol-newline,1,fo) != 1 || fputc('\n',fo) == EOF) {    
-			    fprintf(stderr,"write error:");perror(argv[1]);
-			    exit(1);
+    if (ProcMode == 2) {
+	leveldb_iterator_t *dbiter;
+	char *key, *data;
+	size_t klen, dlen;
+	leveldb_options_t *ldboutopt;
+	leveldb_readoptions_t *dboropt;
+	leveldb_writeoptions_t *dbowopt;
+
+	ldboutopt = leveldb_options_create();
+	leveldb_options_set_create_if_missing(ldboutopt,1);
+	leveldb_options_set_comparator(ldboutopt,leveldb_comparator_create(NULL,comp_destruct,comp4,comp_name));
+	err = NULL;
+	dbo = leveldb_open(ldboutopt, DBOUT, &err);
+	dboropt = leveldb_readoptions_create();
+	dbowopt = leveldb_writeoptions_create();
+	if (err != NULL) {
+	    fprintf(stderr,"Could not create database \"%s\"\n%s\n",DBOUT,err);
+	    exit(1);
+	}
+
+	dbiter = leveldb_create_iterator(db, ldbreadopt);
+	if (!dbiter) {
+	    fprintf(stderr,"Can't create iterator (leveldb error)\n");
+	    exit(1);
+	}
+	fprintf(stderr,"Building final output\n");
+	for (leveldb_iter_seek_to_first(dbiter);leveldb_iter_valid(dbiter);leveldb_iter_next(dbiter)) {
+	    key = (char *)leveldb_iter_key(dbiter,&klen);
+	    data = (char *)leveldb_iter_value(dbiter,&dlen);
+	    leveldb_put(dbo,dbowopt,data,dlen,key,klen,&err);
+	    if (err) {
+		fprintf(stderr,"Can't write final database. Disk full?");
+		exit(1);
+	    }
+	}
+	if (DoDebug) {
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
+	}
+	leveldb_iter_destroy(dbiter);
+	leveldb_close(db);
+	leveldb_destroy_db(ldbopt,DBNAME,&err);
+	err=NULL;
+	dbiter = leveldb_create_iterator(dbo, dboropt);
+        fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
+	Write_global = 0;
+	for (leveldb_iter_seek_to_first(dbiter);leveldb_iter_valid(dbiter);leveldb_iter_next(dbiter)) {
+	    key = (char *)leveldb_iter_key(dbiter,&klen);
+	    data = (char *)leveldb_iter_value(dbiter,&dlen);
+	    if (fwrite(data,dlen,1,fo) != 1 || fputc('\n',fo) == EOF) {
+		fprintf(stderr,"Write failed to output file.  Disk full?\n");
+		exit(1);
+	    }
+	    Write_global++;
+	}
+	leveldb_iter_destroy(dbiter);
+	leveldb_close(dbo);
+	leveldb_destroy_db(ldboutopt,DBOUT,&err);
+	if (DoDebug) {
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"Write output took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
+	}
+    } else {
+        fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
+	if (DoCommon) {
+	    for (curpos = 0; curpos < (filesize/64 + 1);curpos++) {
+		if ((RC = Common[curpos])) {
+		    for (x=0; RC && x < 64; x++, RC = RC >> 1) {
+			if (RC &1) {
+			    Currem++;
+			    newline = &Fileinmem[curpos*64+x];
+			    eol = findeol(newline,newline - Fileend);
+			    if (!eol) eol = newline;
+			    if (fwrite(newline,eol-newline,1,fo) != 1 || fputc('\n',fo) == EOF) {    
+				fprintf(stderr,"write error:");perror(argv[1]);
+				exit(1);
+			    }
 			}
 		    }
 		}
 	    }
-	}
-	Write_global = Currem;
-    } else {
-	work = Line / Maxt;
-	if (work < Maxt) work = Line;
-	curline = 1;
-	possess(Common_lock);
-	Write_global = 0;
-	twist(Common_lock,TO,curline);
-	for (curpos=0; curpos < Line; curpos += work) {
-	    possess(FreeWaiting);
-	    wait_for(FreeWaiting, NOT_TO_BE,0);
-	    job = FreeHead;
-	    FreeHead = job->next;
-	    if (FreeHead == NULL) FreeTail = &FreeHead;
-	    twist(FreeWaiting, BY, -1);
-	    job->next = NULL;
-	    job->func = JOB_WRITE;
-	    job->fo = fo;
-	    job->fn = argv[1];
-	    job->startline = curline++;
-	    job->start = curpos;
-	    job->end = curpos + work;
-	    if (job->end > Line) job->end = Line;
-	    if (Workthread < Maxt) {
-		launch(procjob,NULL);
-		Workthread++;
+	    Write_global = Currem;
+	} else {
+	    work = Line / Maxt;
+	    if (work < Maxt) work = Line;
+	    curline = 1;
+	    possess(Common_lock);
+	    Write_global = 0;
+	    twist(Common_lock,TO,curline);
+	    for (curpos=0; curpos < Line; curpos += work) {
+		possess(FreeWaiting);
+		wait_for(FreeWaiting, NOT_TO_BE,0);
+		job = FreeHead;
+		FreeHead = job->next;
+		if (FreeHead == NULL) FreeTail = &FreeHead;
+		twist(FreeWaiting, BY, -1);
+		job->next = NULL;
+		job->func = JOB_WRITE;
+		job->fo = fo;
+		job->fn = argv[1];
+		job->startline = curline++;
+		job->start = curpos;
+		job->end = curpos + work;
+		if (job->end > Line) job->end = Line;
+		if (Workthread < Maxt) {
+		    launch(procjob,NULL);
+		    Workthread++;
+		}
+		possess(WorkWaiting);
+		*WorkTail = job;
+		WorkTail = &(job->next);
+		twist(WorkWaiting,BY,+1);
 	    }
-	    possess(WorkWaiting);
-	    *WorkTail = job;
-	    WorkTail = &(job->next);
-	    twist(WorkWaiting,BY,+1);
+	    possess(FreeWaiting);
+	    wait_for(FreeWaiting,TO_BE,Maxt);
+	    release(FreeWaiting);
+	    possess(Common_lock);
+	    release(Common_lock);
 	}
-	possess(FreeWaiting);
-	wait_for(FreeWaiting,TO_BE,Maxt);
-	release(FreeWaiting);
-	possess(Common_lock);
-	release(Common_lock);
 	if (DoDebug) {
 	    current_utc_time(&curtime);
 	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
