@@ -35,6 +35,8 @@ rling dynamically sizes the memory to be appropriate for the file.  By not havin
 xxHash is a great new hashing method - its very fast and portable.  By combining a dynamic (overridable) hash table with an excellent hash function, performance was accelerated greatly.  Also, because hash tables are sized dynamically, there is no need to guess "optimal" hash sizes.
 * Multi threaded Binary searches and sorts\
 Thanks to blazer's multi threaded qsort, sorts are very fast, and make use of all of your system thread and multicore resources.  In general, hashing is faster than binary search, but binary search uses half of the memory, and can be many times faster for certain kinds of input.
+* Filesystem-based database for very large files\
+If you need to process very large datasets, and don't have enough memory, the -f option allows you to use a leveldb-based database instead of in-memory.  This does allow unlimited file sizes, but you do need substantial free disk space.  Use the -M option to give it more cache for the database, and -T to tell it where to put the databases (defaults to current directory.
 * Memory use estimates\
 For large files, memory use can still be high.  rling displays the estimated amount of memory to be used as soon as practical after reading the input files.  This can still be "too late" for some use cases - in general, you need at least 2 times the input file size in memory.
 * stdin/stdout/named pipes fully supported\
@@ -59,10 +61,10 @@ all files matching /path/to/others/*.  Any line that is found in these files tha
 `rling -nb last-names.txt new-names.txt /path/to/names/[a-f]*`\
 This will read last-names.txt, *not* remove duplicates (-n switch), and use binary search (-b) to remove any last names that match those lines in the files /path/to/names/[a-f]*.
 
-`rling clean-list.txt clean-list.txt /dev/null` [or nul: on Windows]\
-This will read clean-list.txt, remove all duplicate lines, and re-write it (in original order) back to clean-list.txt.  This use is permitted (maybe not recommended, but permitted), because all of the input file is read into memory prior to opening the output file for writing.  Great if you are short on disk space, too.  The "/dev/null" simply means no lines will be matched (thus no lines removed) from the input file, other than duplicate lines.
+`rling clean-list.txt clean-list.txt`\
+This will read clean-list.txt, remove all duplicate lines, and re-write it (in original order) back to clean-list.txt.  This use is permitted (maybe not recommended, but permitted), because all of the input file is read into memory prior to opening the output file for writing.  Great if you are short on disk space, too.
 
-`find /path/to/names -type f -print0 | xargs -0 gzcat | rling stdin stdout /dev/null | gzip -9 > all-names.txt.gz`\
+`find /path/to/names -type f -print0 | xargs -0 gzcat | rling stdin stdout | gzip -9 > all-names.txt.gz`\
 This will look in /path/to/names for all files, use gzcat to decompress or access them, pipe the result to rling which will then de-duplicate them all (keeping original order), and then pipe the resultant output to gzip -9 so as to create a new, de-duplicated name-list in compressed format.
 
 `rling -c all-names.txt matching.txt /path/to/names/[a-f]*`\
