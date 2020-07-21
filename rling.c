@@ -101,9 +101,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.33 2020/07/21 02:32:44 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.34 2020/07/21 06:22:10 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.34  2020/07/21 06:22:10  dlr
+ * Fix poor linecount performance, add -c mode support for -f
+ *
  * Revision 1.33  2020/07/21 02:32:44  dlr
  * added -f option to use filesystem instead of memory to resolve duplicates.
  * Uses leveldb, and performance is... ok.
@@ -1044,17 +1047,26 @@ MDXALIGN void procjob(void *dummy) {
 	    case JOB_FINDDB:
 		rem = 0;
 		numline = 0;
+		err = NULL;
 	        for (curline = job->startline; numline < job->numline; curline++,numline++) {
   		    key = &job->readbuf[job->readindex[curline].offset];
 		    ch = job->readindex[curline].len;
 		    crc = XXH3_64bits(key,ch);
 		    if (Bloom[(crc & BLOOMMASK)/64] & ((uint64_t)1L<<(crc & 0x3f))) {
-			leveldb_delete(job->db,job->ldbwopt,key,ch,&err);
-			if (err) {
-			    fprintf(stderr,"DB Delete error\n%s\n",err);
-			    exit(1);
+			newline = leveldb_get(job->db,job->ldbreadopt,key,ch,&DBlen,&err);
+			if (newline && DBlen == 8) {
+			    rem++;
+			    if (DoCommon) {
+				Commonset(*(uint64_t *)newline);
+			    } else {
+				leveldb_delete(job->db,job->ldbwopt,key,ch,&err);
+				if (err) {
+				    fprintf(stderr,"DB Delete error\n%s\n",err);
+				    exit(1);
+				}
+			    }
+			    leveldb_free(newline);
 			}
-			rem++;
 		    }
 		}
 		if (rem) {
@@ -1423,10 +1435,9 @@ errexit:
     sprintf(DBNAME,"%s/%s%d.db",TempPath,"rling",getpid());
     sprintf(DBOUT,"%s/%s%d.db",TempPath,"rlingo",getpid());
 
-    if (ProcMode == 2 && (Dedupe == 0 || DoCommon)) {
+    if (ProcMode == 2 && (Dedupe == 0 )) {
 	if (Dedupe = 0) fprintf(stderr,"The -n switch cannot be used with -f\n");
-	if (DoCommon) fprintf(stderr,"The -c switch cannot be used with -f\n");
-	fprintf(stderr,"Unfortunately, when using file mode, deduplication is required\nand common (-c) cannot be used.");
+	fprintf(stderr,"Unfortunately, when using file mode, deduplication is required\n");
 	exit(1);
     }
     if (ErrCheck) {
@@ -1538,6 +1549,9 @@ errexit:
 	Filesize = filesize;
 	fprintf(stderr,"Counting lines...    ");fflush(stderr);
 
+	WorkUnitLine = filesize / (Maxt * 256);
+	if (WorkUnitLine < Maxt)
+	    WorkUnitLine = filesize;
 	thisline = Fileinmem;
 	Estline = filesize / 8;
 	if (Estline <10) Estline = 10;
@@ -1745,6 +1759,15 @@ errexit:
 
 	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines)\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global);fflush(stderr);
 	memsize = MaxMem + BLOOMSIZE/8 + MAXCHUNK;
+	if (DoCommon) {
+	    Common = calloc(Line/64+16,sizeof(uint64_t));
+	    memsize += Line/64+16;
+	    if (!Common || !Common_lock) {
+		fprintf(stderr,"Could not allocate space for common array\n");
+		fprintf(stderr,"Make more memory available, or reduce size of input file\n");
+		exit(1);
+	    }
+	}
 	if (DoDebug) {
 	    current_utc_time(&curtime);
 	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
@@ -1887,7 +1910,7 @@ errexit:
     Totrem = 0; 
     for (x=2; x < argc; x++) {
 	Currem_global = 0;
-	fprintf(stderr,"Removing from \"%s\"... ",argv[x]);fflush(stderr);
+	fprintf(stderr,"%s from \"%s\"... ",(DoCommon)?"Checking common":"Removing",argv[x]);fflush(stderr);
 	stat(argv[x],&sb1);
 	if (sb1.st_mode & S_IFDIR) {
 	    fprintf(stderr,"skipping directory\n");
@@ -1963,19 +1986,19 @@ errexit:
 	wait_for(FreeWaiting, TO_BE, Maxt);
 	release(FreeWaiting);
 	possess(Currem_lock);
-	fprintf(stderr,"%"PRIu64" removed\n",(uint64_t)Currem_global);
+	fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
 	Totrem += Currem_global;
 	release(Currem_lock);
 	fclose(fi);
 	if (Unique_global <= Totrem) break;
     }
-    fprintf(stderr,"\n%s total line%s removed\n",commify(Totrem),(Totrem==1)?"":"s");
+    fprintf(stderr,"\n%s total line%s %s\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed");
 
     if (DoDebug) {
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	fprintf(stderr,"Removal process took %.4f seconds\n",wtime);
+	fprintf(stderr,"%s process took %.4f seconds\n",(DoCommon)?"Common":"Removal",wtime);
 	current_utc_time(&starttime);
     }
     if (ProcMode == 1) {
@@ -2032,7 +2055,13 @@ errexit:
 	for (leveldb_iter_seek_to_first(dbiter);leveldb_iter_valid(dbiter);leveldb_iter_next(dbiter)) {
 	    key = (char *)leveldb_iter_key(dbiter,&klen);
 	    data = (char *)leveldb_iter_value(dbiter,&dlen);
-	    leveldb_put(dbo,dbowopt,data,dlen,key,klen,&err);
+	    if (DoCommon && dlen == 8) {
+		RC = *(uint64_t *)data;
+		if (Common[RC/64] & (uint64_t)1L <<(RC & 0x3f)) 
+		    leveldb_put(dbo,dbowopt,data,dlen,key,klen,&err);
+	    } else {
+		leveldb_put(dbo,dbowopt,data,dlen,key,klen,&err);
+	    }
 	    if (err) {
 		fprintf(stderr,"Can't write final database. Disk full?");
 		exit(1);
