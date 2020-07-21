@@ -73,7 +73,7 @@ This will read in all-names.txt, then find only names in the input file, and pre
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.
 
-There are some "hidden features" in rling.\
+There are some "hidden features" in rling.
 * -t [thread count]\
 -t allows you to override the default "use all" threads for your hardware platform.  This can be useful if you need to conserve computing resources.  Additionally, sometimes limiting thread count can actually make a process faster - this is usually the case if you are running near the bandwidth of the memory with all threads active.
 * -p [hash prime size]\
