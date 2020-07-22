@@ -2,7 +2,7 @@
 #though it might be possible to compile for 32-bit environment,
 #its not likely to work well.  Use 64 bit operating environments
 #for rling
-#ensure you have package libleveldb-dev installed
+#ensure you have package libdb-dev installed
 
 #COPTS=-DPOWERPC -maltivec
 COPTS=-DINTEL
@@ -20,4 +20,4 @@ rling.o: rling.c
 	cc -fomit-frame-pointer -pthread $(COPTS) -O3 -c rling.c
 
 rling: rling.o yarn.o qsort_mt.o
-	cc  $(COPTS) -pthread -o rling rling.o yarn.o qsort_mt.o -lleveldb
+	cc  $(COPTS) -pthread -o rling rling.o yarn.o qsort_mt.o -ldb

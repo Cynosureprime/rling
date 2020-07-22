@@ -13,7 +13,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-#include <leveldb/c.h>
+#include <db.h>
 
 #include "yarn.h"
 
@@ -101,9 +101,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.35 2020/07/21 06:48:58 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.36 2020/07/22 13:49:16 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.36  2020/07/22 13:49:16  dlr
+ * Chavnge from leveldb to Berkeley db for a 3x improvement in performance.
+ *
  * Revision 1.35  2020/07/21 06:48:58  dlr
  * Make -v mode the default.  Will re-use -v later for debug
  *
@@ -265,14 +268,9 @@ struct JOB {
     uint64_t start,end;
     int startline, numline;
     char *readbuf, *fn;
-    leveldb_t *db;
-    leveldb_options_t *ldbopt;
-    leveldb_readoptions_t *ldbreadopt;
-    leveldb_writeoptions_t *ldbwopt;
+    DB *db;
     struct WorkUnit *wu;
     struct LineInfo *readindex;
-    struct DBSort *DBSort;
-    int dbsize, readsize;
     FILE *fo;
     int func;
 } *Jobs;
@@ -600,14 +598,16 @@ int comp3(const void *a, const void *b) {
     return(0);
 }
 
-int comp4(void *v, const char *a, size_t alen, const char *b, size_t blen) {
-    uint64_t a1 = *(uint64_t *)a;
-    uint64_t b1 = *(uint64_t *)b;
-    return (a1-b1);
+int comp4(DB *v, const DBT *a, const DBT *b) {
+    uint64_t a1,b1;
+    if (a->size != 8 || b->size != 8) return 0;
+    a1 = *(uint64_t *)a->data;
+    b1 = *(uint64_t *)b->data;
+    if (a1 < b1) return(-1);
+    if (a1 > b1) return(1);
+    return (0);
 }
 
-void comp_destruct(void *a){return;}
-const char *comp_name(void *a){return("comp uint64_t");}
 
 /*
  * MDXALIGN forces the process to start on an appropriate boundary.  Windows
@@ -677,8 +677,8 @@ MDXALIGN void procjob(void *dummy) {
     uint64_t x, unique, occ, rem,thisnum, crc, index, j, RC, COM, thisend;
     int64_t llen, maxdepth;
     int res, curline, numline, ch, delflag;
+    DBT dbkey, dbdata;
     size_t DBlen;
-    char *err;
 
     while (1) {
         possess(WorkWaiting);
@@ -1010,31 +1010,31 @@ MDXALIGN void procjob(void *dummy) {
 	    case JOB_BUILDDB:
 		unique = rem = 0;
 		numline = 0;
-		err = NULL;
+		memset(&dbkey,0,sizeof(dbkey));
+		memset(&dbdata,0,sizeof(dbdata));
+		dbkey.flags = DB_DBT_USERMEM;
+		dbdata.flags = DB_DBT_USERMEM;
 		index = job->end + job->startline;
 		for (curline=job->startline; numline<job->numline; curline++,numline++, index++) {
 		    key = &job->readbuf[job->readindex[curline].offset];
 		    ch = job->readindex[curline].len;
 		    crc = XXH3_64bits(key,ch);
 		    Bloomset((crc & BLOOMMASK));
-		    possess(Common_lock);
-		    newline = leveldb_get(job->db,job->ldbreadopt,key,ch,&DBlen,&err);
-		    if (err)  {
-			fprintf(stderr,"DB read error %s\n",err);
-			exit(1);
-		    }
-		    if (newline || DBlen) {
-			if (newline) leveldb_free(newline);
-			rem++;
-		    } else {
-		 	unique++;
-			leveldb_put(job->db,job->ldbwopt,key,ch,(char *)&index,sizeof(index),&err);
-			if (err) {
-			    fprintf(stderr,"Database write error\nOut of disk space?\n%s\n",err);
+		    dbkey.data = key;
+		    dbkey.size = ch;
+		    dbdata.data = &index;
+		    dbdata.size = sizeof(index);
+		    if ((res = job->db->put(job->db,NULL,&dbkey,&dbdata,DB_NOOVERWRITE))) {
+			if (res == DB_KEYEXIST) 
+			    rem++;
+			else {
+			    fprintf(stderr,"Can't write to database. Disk full?\n");
+			    fprintf(stderr,"%s\n",db_strerror(res));
 			    exit(1);
 			}
+		    } else {
+			unique++;
 		    }
-		    release(Common_lock);
 		}
 		if (job->readbuf == Readbuf) {
 		    possess(ReadBuf0);
@@ -1050,25 +1050,32 @@ MDXALIGN void procjob(void *dummy) {
 	    case JOB_FINDDB:
 		rem = 0;
 		numline = 0;
-		err = NULL;
+		memset(&dbkey,0,sizeof(dbkey));
+		memset(&dbdata,0,sizeof(dbdata));
+		dbkey.flags = DB_DBT_USERMEM;
+
 	        for (curline = job->startline; numline < job->numline; curline++,numline++) {
   		    key = &job->readbuf[job->readindex[curline].offset];
 		    ch = job->readindex[curline].len;
 		    crc = XXH3_64bits(key,ch);
 		    if (Bloom[(crc & BLOOMMASK)/64] & ((uint64_t)1L<<(crc & 0x3f))) {
-			newline = leveldb_get(job->db,job->ldbreadopt,key,ch,&DBlen,&err);
-			if (newline && DBlen == 8) {
+			dbkey.data = key;
+			dbkey.ulen = dbkey.size = ch;
+			dbdata.data = &index;
+			dbdata.ulen = sizeof(index);
+			dbdata.flags = DB_DBT_USERMEM;
+			res = job->db->get(job->db,NULL,&dbkey,&dbdata,0);
+			if (res == 0 &&  dbdata.size == sizeof(index)) {
 			    rem++;
 			    if (DoCommon) {
-				Commonset(*(uint64_t *)newline);
+				Commonset(*(uint64_t *)dbdata.data);
 			    } else {
-				leveldb_delete(job->db,job->ldbwopt,key,ch,&err);
-				if (err) {
-				    fprintf(stderr,"DB Delete error\n%s\n",err);
+				res = job->db->del(job->db,NULL,&dbkey,0);
+				if (res != 0) {
+				    fprintf(stderr,"DB Delete error\n%s\n",db_strerror(res));
 				    exit(1);
 				}
 			    }
-			    leveldb_free(newline);
 			}
 		    }
 		}
@@ -1288,11 +1295,10 @@ int main(int argc, char **argv) {
     struct WorkUnit *wu, *wulast;
     struct stat sb1;
     char *linein, *newline, **sorted, *thisline, *eol;
-    leveldb_t *db,*dbo;
-    leveldb_options_t *ldbopt;
-    leveldb_readoptions_t *ldbreadopt;
-    leveldb_writeoptions_t *ldbwopt;
-    char *err,DBNAME[MDXMAXPATHLEN*2],DBOUT[MDXMAXPATHLEN*2];
+    DB *db, *dbo;
+    DBT dbkey, dbdata;
+    DBC *dbcur;
+    char DBNAME[MDXMAXPATHLEN*2],DBOUT[MDXMAXPATHLEN*2];
 #ifndef _AIX
     struct option longopt[] = {
 	{NULL,0,NULL,0}
@@ -1300,7 +1306,6 @@ int main(int argc, char **argv) {
 #endif
    
     MaxMem = MAXCHUNK;
-    err = NULL;
     strcpy(TempPath,".");
     ErrCheck = 1;
     DoDebug = 0;
@@ -1399,7 +1404,7 @@ errexit:
 		if (RC <64*1024) {
 		    fprintf(stderr,"%"PRIu64" bytes isn't going to be very effective\nTry using more than 64k\n",RC);
 		}
-		fprintf(stderr,"Memory for cache set to %"PRIu64" bytes\n",RC);
+		fprintf(stderr,"Memory for cache set to %"PRIu64" bytes (was %"PRIu64")\n",RC,MaxMem);
 		MaxMem = RC;
 		linein = malloc(MaxMem);
 		if (!linein) {
@@ -1691,25 +1696,25 @@ errexit:
 		      (Line*sizeof(struct Linelist));
 	}
     } else {
-	ldbopt = leveldb_options_create();
-	leveldb_options_set_create_if_missing(ldbopt,1);
-	leveldb_options_set_cache(ldbopt,leveldb_cache_create_lru(MaxMem));
-
-	db = leveldb_open(ldbopt, DBNAME, &err);
-	if (err != NULL) {
-	    fprintf(stderr,"Could not create database \"%s\"\n%s\n",DBNAME,err);
+	if ((x = db_create(&db, NULL,0))) {
+	    fprintf(stderr,"db_create: %s\n",db_strerror(x));
 	    exit(1);
 	}
-	ldbreadopt = leveldb_readoptions_create();
-	ldbwopt = leveldb_writeoptions_create();
+	db->set_pagesize(db,32768);
+	db->set_cachesize(db,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
+	if ((x = db->open(db, NULL,DBNAME,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
+	    fprintf(stderr,"Could not create database \"%s\"\n",DBNAME);
+	    fprintf(stderr,"db_open: %s\n",db_strerror(x));
+	    exit(1);
+	}
+
 	Bloom = calloc(BLOOMSIZE/64 +8,1);
 	if (!Bloom) {
 	    fprintf(stderr,"Bloom filter could not be allocated\nMake more memory available, or use -M option to reduce cache size from\nthe current %"PRIu64" bytes\n",MaxMem);
 	    exit(1);
 	}
 	while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
-	    numline = (Linecount / Maxt);
-	    if (numline < Maxt) numline = Linecount;
+	    numline = Linecount;
 	    for (curline = 0; curline < Linecount; curline += numline) {
 		possess(FreeWaiting);
 		wait_for(FreeWaiting, NOT_TO_BE,0);
@@ -1719,8 +1724,7 @@ errexit:
 		twist(FreeWaiting, BY, -1);
 		job->next = NULL;
 		job->func = JOB_BUILDDB;
-		job->db = db; job->ldbopt = ldbopt;
-		job->ldbreadopt = ldbreadopt; job->ldbwopt = ldbwopt;
+		job->db = db;
 		job->start = 0;
 		job->end = Line;
 		job->startline = curline;
@@ -1745,6 +1749,9 @@ errexit:
 		*WorkTail = job;
 		WorkTail = &(job->next);
 		twist(WorkWaiting,BY,+1);
+		possess(FreeWaiting);
+		wait_for(FreeWaiting,TO_BE,Maxt);
+		release(FreeWaiting);
 	    }
 	    Line += Linecount;
 	}
@@ -1934,9 +1941,8 @@ errexit:
 			break;
 		    case 2:
 			job->func = JOB_FINDDB;
-			job->db = db; job->ldbopt = ldbopt;
-			job->ldbreadopt = ldbreadopt;
-			job->ldbwopt = ldbwopt;
+			job->db = db; 
+			numline = Linecount;
 			break;
 		    default:
 		        fprintf(stderr,"Unkown ProcMode=%d\n",ProcMode);
@@ -1966,6 +1972,11 @@ errexit:
 		*WorkTail = job;
 		WorkTail = &(job->next);
 		twist(WorkWaiting,BY,+1);
+		if (ProcMode == 2) {
+		    possess(FreeWaiting);
+		    wait_for(FreeWaiting, TO_BE, Maxt);
+		    release(FreeWaiting);
+		}
 	    }
 	}
 	possess(FreeWaiting);
@@ -2007,70 +2018,85 @@ errexit:
     }
     Currem = 0;
     if (ProcMode == 2) {
-	leveldb_iterator_t *dbiter;
-	char *key, *data;
-	size_t klen, dlen;
-	leveldb_options_t *ldboutopt;
-	leveldb_readoptions_t *dboropt;
-	leveldb_writeoptions_t *dbowopt;
 
-	ldboutopt = leveldb_options_create();
-	leveldb_options_set_create_if_missing(ldboutopt,1);
-	leveldb_options_set_comparator(ldboutopt,leveldb_comparator_create(NULL,comp_destruct,comp4,comp_name));
-	err = NULL;
-	dbo = leveldb_open(ldboutopt, DBOUT, &err);
-	dboropt = leveldb_readoptions_create();
-	dbowopt = leveldb_writeoptions_create();
-	if (err != NULL) {
-	    fprintf(stderr,"Could not create database \"%s\"\n%s\n",DBOUT,err);
+	if ((x = db_create(&dbo, NULL,0))) {
+	    fprintf(stderr,"db_create: %s\n",db_strerror(x));
+	    exit(1);
+	}
+	dbo->set_pagesize(dbo,32768);
+	dbo->set_cachesize(dbo,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
+	dbo->set_bt_compare(dbo,comp4);
+	if ((x = dbo->open(dbo, NULL,DBOUT,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
+	    fprintf(stderr,"Could not create database \"%s\"\n",DBOUT);
+	    fprintf(stderr,"db_open: %s\n",db_strerror(x));
 	    exit(1);
 	}
 
-	dbiter = leveldb_create_iterator(db, ldbreadopt);
-	if (!dbiter) {
-	    fprintf(stderr,"Can't create iterator (leveldb error)\n");
+	if ((x = db->cursor(db,NULL,&dbcur,0))) {
+	    fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
 	    exit(1);
 	}
 	fprintf(stderr,"Building final output\n");
-	for (leveldb_iter_seek_to_first(dbiter);leveldb_iter_valid(dbiter);leveldb_iter_next(dbiter)) {
-	    key = (char *)leveldb_iter_key(dbiter,&klen);
-	    data = (char *)leveldb_iter_value(dbiter,&dlen);
-	    if (DoCommon && dlen == 8) {
-		RC = *(uint64_t *)data;
-		if (Common[RC/64] & (uint64_t)1L <<(RC & 0x3f)) 
-		    leveldb_put(dbo,dbowopt,data,dlen,key,klen,&err);
-	    } else {
-		leveldb_put(dbo,dbowopt,data,dlen,key,klen,&err);
-	    }
-	    if (err) {
-		fprintf(stderr,"Can't write final database. Disk full?");
+	memset(&dbkey,0,sizeof(dbkey));
+	memset(&dbdata,0,sizeof(dbdata));
+	dbkey.flags = DB_DBT_MALLOC;
+	dbdata.flags = DB_DBT_MALLOC;
+	while (1) {
+	    x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+	    if (x) {
+		if (x == DB_NOTFOUND) break;
+		fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
 		exit(1);
 	    }
+	    if (DoCommon && dbdata.size == 8) {
+		work = *(uint64_t *)dbdata.data;
+		if ((Common[work/64] & (uint64_t)1L << (work&0x3f)) == 0) {
+		    free(dbkey.data);
+		    free(dbdata.data);
+		    continue;
+		}
+	    }
+	    x = dbo->put(dbo,NULL,&dbdata,&dbkey,0);
+
+	    if (x) {
+		fprintf(stderr,"Can't write final database.  Disk full?\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    free(dbkey.data);
+	    free(dbdata.data);
 	}
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
 	current_utc_time(&starttime);
-	leveldb_iter_destroy(dbiter);
-	leveldb_close(db);
-	leveldb_destroy_db(ldbopt,DBNAME,&err);
-	err=NULL;
-	dbiter = leveldb_create_iterator(dbo, dboropt);
+	dbcur->c_close(dbcur);
+	db->close(db,0);
+	unlink(DBNAME);
+	if ((x = dbo->cursor(dbo,NULL,&dbcur,0))) {
+	    fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+	    exit(1);
+	}
         fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
 	Write_global = 0;
-	for (leveldb_iter_seek_to_first(dbiter);leveldb_iter_valid(dbiter);leveldb_iter_next(dbiter)) {
-	    key = (char *)leveldb_iter_key(dbiter,&klen);
-	    data = (char *)leveldb_iter_value(dbiter,&dlen);
-	    if (fwrite(data,dlen,1,fo) != 1 || fputc('\n',fo) == EOF) {
+	while (1) {
+	    x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+	    if (x) {
+		if (x == DB_NOTFOUND) break;
+		fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    if (fwrite(dbdata.data,dbdata.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
 		fprintf(stderr,"Write failed to output file.  Disk full?\n");
 		exit(1);
 	    }
+	    free(dbkey.data);
+	    free(dbdata.data);
 	    Write_global++;
 	}
-	leveldb_iter_destroy(dbiter);
-	leveldb_close(dbo);
-	leveldb_destroy_db(ldboutopt,DBOUT,&err);
+	dbcur->close(dbcur);
+	dbo->close(dbo,0);
+	unlink(DBOUT);
     } else {
         fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
 	if (DoCommon) {
