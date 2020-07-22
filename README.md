@@ -36,7 +36,7 @@ xxHash is a great new hashing method - its very fast and portable.  By combining
 * Multi threaded Binary searches and sorts\
 Thanks to blazer's multi threaded qsort, sorts are very fast, and make use of all of your system thread and multicore resources.  In general, hashing is faster than binary search, but binary search uses half of the memory, and can be many times faster for certain kinds of input.
 * Filesystem-based database for very large files\
-If you need to process very large datasets, and don't have enough memory, the -f option allows you to use a Berkeley db-based database instead of in-memory.  This does allow unlimited file sizes, but you do need substantial free disk space.  Use the -M option to give it more cache for the database, and -T to tell it where to put the databases (defaults to current directory.
+If you need to process very large datasets, and don't have enough memory, the -f option allows you to use a Berkeley db-based database instead of in-memory.  This does allow unlimited file sizes, but you do need substantial free disk space.  Use the -M option to give it more cache for the database, and -T to tell it where to put the databases (defaults to current directory).
 * Memory use estimates\
 For large files, memory use can still be high.  rling displays the estimated amount of memory to be used as soon as practical after reading the input files.  This can still be "too late" for some use cases - in general, you need at least 2 times the input file size in memory.
 * stdin/stdout/named pipes fully supported\
@@ -81,7 +81,7 @@ There are some "hidden features" in rling.
 * -v\
 -v is a secret "verbose" mode switch to rling.  It displays the run time of each section of the program, so you can understand where all the time is going to.
 * -i\
--i "ignores" errors in the filenames.  By default, rling checks to make sure each filename specified on the command line is accessable.  It does not check to make sure it has read access to the file, nor does it care if it is a real file, or a named pipe, and certainly does not check to see if you have specified the correct input and output names!  -i suppresses these checks, which can be handy if you have files which might appear later, for some reason. 
+-i "ignores" errors in the filenames.  By default, rling checks to make sure each filename specified on the command line is accessable.  It does not check to make sure it has read access to the file, nor does it care if it is a real file, or a named pipe, and certainly does not check to see if you have specified the correct input and output names!  -i suppresses these checks, which can be handy if you have files which might appear later, for some reason.
 To-do list:\
 Better portability.
 

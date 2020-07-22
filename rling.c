@@ -31,7 +31,7 @@
  *
  * Lines are sequences of zero or more characters, terminated by a
  * \n (but \r\n line termination is accepted, and changed to \n).
- * 
+ *
  * rling uses two (selectable) methods for this:  Hash, and binary search.
  *
  * Hash is the default mode, and ususally the fastest.  In this mode, each
@@ -42,7 +42,7 @@
  * requested with -p, then rling uses a shift-and-mask instead of modulo
  * method, which can boost speed even more.
  *
- * Binary search is selected with the -b option.  Binary search is 
+ * Binary search is selected with the -b option.  Binary search is
  * usually a bit slower than hash, but uses about half of the memory
  * which may be important with large files and small memory systems.
  *
@@ -50,7 +50,7 @@
  * system.  You can override this with the -t option, requesting more
  * or fewer threads to be used.  In general, the number of threads
  * used is not important until you get to hundreds of thousands of lines.
- * For example, processing a 1 gigabyte 100,000,000 line file takes 2 
+ * For example, processing a 1 gigabyte 100,000,000 line file takes 2
  * to 8 seconds on a Power8 system.
  *
  * rling can also output the lines "common" to a group of files (present in
@@ -60,7 +60,7 @@
  * Here are some typical uses:
  *
  * rling infile outfile file1 file2
- * This reads infile, removes duplicates from it, and then removes any 
+ * This reads infile, removes duplicates from it, and then removes any
  * lines matching the lines in file1 and file2, then writes the result to
  * outfile.
  *
@@ -85,15 +85,15 @@
  * piping the output to rling, which then reads infile and then all of
  * stdin, then finally writing the result to outfile.
  *
- * rling was inspired by the "rli" utility from Hashcat, and 
+ * rling was inspired by the "rli" utility from Hashcat, and
  * tychotithonus.  His suggestions, and extensive testing, were
- * foundational.  blazer and hops contributed extensively to the 
+ * foundational.  blazer and hops contributed extensively to the
  * code base - thank you blazer for the qsort_mt code, and hops for
  * multiple suggestions and the xxHash integration.  Thanks also to
  * Cyan4973 for the great work on xxHash
  *
  * Waffle - July, 2020
- */ 
+ */
 
 extern char *optarg;
 extern int optind;
@@ -371,7 +371,7 @@ uint64_t *Common, *Bloom;
  * MarkD marks a particular entry in the Sortlist array as being a "deleted"
  * line, by setting the most significant bit of the address.  This is not
  * portable, but saves memory.  The valididity of the use of this bit is
- * tested for in main, by checking the range of memory used to store the 
+ * tested for in main, by checking the range of memory used to store the
  * file read in.
  */
 uint64_t inline _MarkD(uint64_t *ptr, uint64_t val) {
@@ -414,7 +414,7 @@ void current_utc_time(struct timespec *ts) {
     clock_gettime(CLOCK_REALTIME, ts);
 #endif
 }
-  
+
 /*
  * findeol(pointer, length)
  *
@@ -426,7 +426,7 @@ void current_utc_time(struct timespec *ts) {
  * read memory not available and cause a fault.
  *
  * This is important to the operation of this program, and care should be
- * taken to ensure that the performance of this function is kept fast 
+ * taken to ensure that the performance of this function is kept fast
  */
 
 #if !defined(POWERPC) && !defined(INTEL)
@@ -443,7 +443,7 @@ inline char *findeol(char *s, int64_t l) {
   __m128i cur, seek;
 
   if (l <=0) return (NULL);
-      	
+
   seek = _mm_set1_epi8('\n');
   align = ((uint64_t) s) & 0xf;
   s = (char *) (((uint64_t) s) & 0xfffffffffffffff0L);
@@ -567,7 +567,7 @@ int mystrcmp(const char *a, const char *b) {
   return c1 - c2;
 }
 
-    
+
 /*
  * comp1 compares two Sortline[] strings, and removes the "deleted"
  * bit in case one ore more of the strings are in the deleted state.
@@ -624,16 +624,16 @@ int comp4(DB *v, const DBT *a, const DBT *b) {
 #endif
 
 /*
- * procjob is the main processing thread function.  It runs as a separate 
+ * procjob is the main processing thread function.  It runs as a separate
  * thread, and up to Maxt threads can be running simultaneously.
  * In most cases, jobs are pulled from the head of the WorkWaiting
  * list, processed, and then the job is returned to the FreeWaiting list.
  * The exception is JOB_DONE, which stays on the head of the list, to
  * allow a single job to terminate all of the active procjob threads.
  *
- * JOB_COUNT is the first operation called. It finds each line in the file 
+ * JOB_COUNT is the first operation called. It finds each line in the file
  * and returns Sortlist[]-style entries into a buffer (which is temporarily
- * allocated from the remove-file-read-buffers).  This is done so that 
+ * allocated from the remove-file-read-buffers).  This is done so that
  * Sortlist can be allocated from contiguous space, makeing realloc much
  * cheaper (both on time and memory). Large numbers of lines can then
  * exands the Sortlist until the whole file is processed.  The test
@@ -654,10 +654,10 @@ int comp4(DB *v, const DBT *a, const DBT *b) {
  * from the remove files.  If matches are found, the matching lines
  * are marked as deleted.  This is only used in -h mode
  *
- * JOB_GENHASH generates the hash table for groups of lines.  This 
+ * JOB_GENHASH generates the hash table for groups of lines.  This
  * use a compare-and-swap method of locking the linked list built from the
  * hash table, rather than a global lock on the hash table, improving
- * performance somewhat.  It is a linked list, however, and is searched 
+ * performance somewhat.  It is a linked list, however, and is searched
  * sequentially.
  *
  * JOB_WRITE finds all non-deleted lines in a given range, and assembles
@@ -693,7 +693,7 @@ MDXALIGN void procjob(void *dummy) {
 	    return;
 	}
 	WorkHead = job->next;
-	if (WorkHead == NULL) 
+	if (WorkHead == NULL)
 	    WorkTail = &WorkHead;
 	twist(WorkWaiting, BY, -1);
 	job->next = NULL;
@@ -708,7 +708,7 @@ MDXALIGN void procjob(void *dummy) {
 		    newline = &Fileinmem[index];
 		    wu->Sortlist[j++] = newline;
 		    eol = findeol(newline,job->end-index);
-		    if (!eol) 
+		    if (!eol)
 		       eol = &Fileinmem[job->end];
 		    if (eol > newline && eol[-1] == '\r')
 		        eol[-1] = '\n';
@@ -719,7 +719,7 @@ MDXALIGN void procjob(void *dummy) {
 			possess(WUWaiting);
 			possess(wu->wulock);
 			wu->next = NULL;
-			for (wulast = NULL, wunext = WUHead; wunext; wulast=wunext,wunext = wunext->next) 
+			for (wulast = NULL, wunext = WUHead; wunext; wulast=wunext,wunext = wunext->next)
 			    if (wu->start < wunext->start)
 			        break;
 			if (wunext == NULL) {
@@ -766,7 +766,7 @@ MDXALIGN void procjob(void *dummy) {
 		__sync_add_and_fetch(&Unique_global,unique);
 		break;
 
-	    	
+
 	    case JOB_SEARCH:
 		rem = 0;
 		numline = 0;
@@ -786,7 +786,7 @@ MDXALIGN void procjob(void *dummy) {
 			for (work = sorted - Sortlist;work < job->end  && comp2(key,&Sortlist[work]) == 0; work--) {
 			    RC = MarkDeleted(work);
 			    if ((RC & 0x8000000000000000L) == 0) {
-				if (DoCommon) 
+				if (DoCommon)
 				    Commonset(RC-(uint64_t)(Fileinmem));
 				rem++;
 			    }
@@ -794,7 +794,7 @@ MDXALIGN void procjob(void *dummy) {
 			for (work = (sorted - Sortlist) + 1;work < job->end && comp2(key,&Sortlist[work]) == 0; work++) {
 			    RC = MarkDeleted(work);
 			    if ((RC & 0x8000000000000000L) == 0) {
-				if (DoCommon) 
+				if (DoCommon)
 				    Commonset(RC-(uint64_t)(Fileinmem));
 				rem++;
 			    }
@@ -821,7 +821,7 @@ MDXALIGN void procjob(void *dummy) {
 
 			key = &job->readbuf[job->readindex[curline].offset];
 			ch = job->readindex[curline].len;
-			key[ch] = '\n'; 
+			key[ch] = '\n';
 			crc = XXH3_64bits(key,ch);
 			for (cur = HashLine[crc&HashMask];cur;cur = cur->next) {
 			    thisnum = cur - Linel;
@@ -839,7 +839,7 @@ MDXALIGN void procjob(void *dummy) {
 
 			key = &job->readbuf[job->readindex[curline].offset];
 			ch = job->readindex[curline].len;
-			key[ch] = '\n'; 
+			key[ch] = '\n';
 			crc = XXH3_64bits(key,ch);
 			for (cur = HashLine[crc%HashPrime];cur;cur = cur->next) {
 			    thisnum = cur - Linel;
@@ -909,7 +909,7 @@ MDXALIGN void procjob(void *dummy) {
 			if (!delflag) {
 			    next->next = NULL;
 			    while (last) {
-			        if (__sync_bool_compare_and_swap(&last->next,next->next,next)) 
+			        if (__sync_bool_compare_and_swap(&last->next,next->next,next))
 				break;
 				last = last->next;
 			    }
@@ -956,7 +956,7 @@ MDXALIGN void procjob(void *dummy) {
 			if (!delflag) {
 			    next->next = NULL;
 			    while (last) {
-			        if (__sync_bool_compare_and_swap(&last->next,next->next,next)) 
+			        if (__sync_bool_compare_and_swap(&last->next,next->next,next))
 				break;
 				last = last->next;
 			    }
@@ -972,7 +972,7 @@ MDXALIGN void procjob(void *dummy) {
 		__sync_add_and_fetch(&Unique_global, unique);
 		__sync_add_and_fetch(&Occ_global, occ);
 		break;
-	
+
 	    case JOB_WRITE:
 		unique = 0;
 		thisend = (uint64_t)Fileend;
@@ -1025,7 +1025,7 @@ MDXALIGN void procjob(void *dummy) {
 		    dbdata.data = &index;
 		    dbdata.size = sizeof(index);
 		    if ((res = job->db->put(job->db,NULL,&dbkey,&dbdata,DB_NOOVERWRITE))) {
-			if (res == DB_KEYEXIST) 
+			if (res == DB_KEYEXIST)
 			    rem++;
 			else {
 			    fprintf(stderr,"Can't write to database. Disk full?\n");
@@ -1107,7 +1107,7 @@ MDXALIGN void procjob(void *dummy) {
  * filljob is used to supply data to the JOB_COUNT operation of the procjob.
  *
  * It is run as a separate thread in order to make the mainline code as
- * simple as possible - this just fills the WorkWaiting list with 
+ * simple as possible - this just fills the WorkWaiting list with
  * data blocks for the JOB_COUNT fuction, and when it is out of data,
  * waits for the queue to drain and exits.
  */
@@ -1163,7 +1163,7 @@ MDXALIGN void filljob(void *dummy) {
  * cacheline is called from main, and reads the input file into buffers
  * By double-buffering, and using locks to keep track of the buffer
  * usage, it is able to keep the input data busy.  It breaks each
- * buffer into "lines", by looking for the eol (\n).  If there is a 
+ * buffer into "lines", by looking for the eol (\n).  If there is a
  * Windows-style eol (\r\n), this is changed to \n\n, and the length
  * reduced by one.
  *
@@ -1214,7 +1214,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
     curcnt += fread(curpos,1,(MAXCHUNK/2)-curcnt-1,fi);
     curpos = readbuf;
     curindex = 0;
-    
+
     while (curindex < curcnt) {
 	readindex[Linecount].offset = curindex;
 	len = 0;
@@ -1247,7 +1247,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 	    Lastleft = &curpos[curindex];
 	    Lastcnt = curcnt - curindex;
 	    if (Lastcnt >= MAXLINE) {
-		Lastcnt = 0; 
+		Lastcnt = 0;
 	    }
 	    break;
 	}
@@ -1267,7 +1267,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 }
 
 
-    
+
 
 /* The mainline code.  Yeah, it's ugly, dresses poorly, and smells funny.
  *
@@ -1304,7 +1304,7 @@ int main(int argc, char **argv) {
 	{NULL,0,NULL,0}
     };
 #endif
-   
+
     MaxMem = MAXCHUNK;
     strcpy(TempPath,".");
     ErrCheck = 1;
@@ -1339,7 +1339,7 @@ errexit:
 		fprintf(stderr,"\t-t number\tNumber of threads to use\n");
 		fprintf(stderr,"\t-p prime\tForce size of hash table\n");
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
-		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory\n");
+		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory)\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
 		fprintf(stderr,"\t-T path\tDirectory to store temp files in\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
@@ -1507,7 +1507,7 @@ errexit:
 #ifdef _WIN32
   setmode(0,O_BINARY);
 #endif
-    } else 
+    } else
 	fi = fopen(argv[0],"rb");
     if (!fi) {
 	fprintf(stderr,"Can't open:");
@@ -1536,11 +1536,11 @@ errexit:
 	    }
 	}
 	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	fprintf(stderr,"%"PRIu64" bytes total in %.4f seconds\n",filesize,wtime);
 	current_utc_time(&starttime);
-	
+
 	Fileinmem = realloc(Fileinmem,filesize + 16);
 	if (!Fileinmem) {
 	    fprintf(stderr,"Could not shrink memory buffer\n");
@@ -1577,7 +1577,7 @@ errexit:
 		    x++;
 		if (wu->start == curpos) {
 		    if ((Line+wu->count) >= (Estline-2)) {
-			if (filesize) 
+			if (filesize)
 			    RC = Estline + (((filesize - curpos)*Estline)/filesize);
 			else
 			    RC = Estline + wu->count;
@@ -1605,7 +1605,7 @@ errexit:
 		    if (WUTail == &(wu->next)) {
 		       if (wulast == NULL)
 			    WUTail = &WUHead;
-		       else 
+		       else
 			    WUTail = &(wulast->next);
 		    }
 		    wu->next = NULL;
@@ -1638,7 +1638,7 @@ errexit:
 	}
 	Sortlist[Line] = NULL;
 	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	fprintf(stderr,"%c%c%c%cFound %"PRIu64" line%s in %.4f seconds\n",8,8,8,8,(uint64_t)Line,(Line==1)?"":"s",wtime);
 	current_utc_time(&starttime);
@@ -1666,7 +1666,7 @@ errexit:
 	}
 	memsize = MAXCHUNK +
 		  MAXLINEPERCHUNK*2*sizeof(struct LineInfo)+32 +
-		  filesize + 
+		  filesize +
 		  Line * sizeof(char **);
 
 	if (ProcMode == 0) {
@@ -1762,7 +1762,7 @@ errexit:
 	fclose(fi);
 
 	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines) in %.4f seconds\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global,wtime);fflush(stderr);
 	current_utc_time(&starttime);
@@ -1785,7 +1785,7 @@ errexit:
     fprintf(stderr,"Estimated memory required: %s (%.02f%s)\n",
 	 commify(memsize),(double)memsize/Memscale[x].scale,
 	 Memscale[x].name);
-    
+
 
     switch (ProcMode) {
     	case 0:
@@ -1799,7 +1799,7 @@ errexit:
 	    }
 
 	    Currem = 0;
-	    
+
 	    fprintf(stderr,"Processing input list...     ");fflush(stderr);
 	    curpos = (Line / Maxt);
 	    if (curpos < Maxt) curpos = Line;
@@ -1829,7 +1829,7 @@ errexit:
 	    release(FreeWaiting);
 
 	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines) in %.4f seconds\n",8,8,8,8,(uint64_t)Unique_global,(uint64_t)Currem_global,wtime);fflush(stderr);
 	    current_utc_time(&starttime);
@@ -1845,7 +1845,7 @@ errexit:
 	    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
 	    qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
 	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	    fprintf(stderr," took %.4f seconds\n",wtime);
 	    current_utc_time(&starttime);
@@ -1869,7 +1869,7 @@ errexit:
 		    curpos = work + WorkUnitLine;
 		    if (curpos > Line) curpos = Line;
 		    while (curpos >0 && curpos < Line && curpos > work) {
-			if (comp1(&Sortlist[curpos-1],&Sortlist[curpos]) == 0) 
+			if (comp1(&Sortlist[curpos-1],&Sortlist[curpos]) == 0)
 			    curpos++;
 			else
 			    break;
@@ -1885,9 +1885,9 @@ errexit:
 		wait_for(FreeWaiting,TO_BE,Maxt);
 		release(FreeWaiting);
 	    }
-	    
+
 	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	    fprintf(stderr,"%c%c%c%c%"PRIu64" unique (%"PRIu64" duplicate lines) in %.4f seconds\n",8,8,8,8,Unique_global,Currem_global,wtime);fflush(stderr);
 	    current_utc_time(&curtime);
@@ -1899,8 +1899,8 @@ errexit:
 	    fprintf(stderr,"Unknown ProcMode=%d\n",ProcMode);
 	    exit(1);
     }
-	
-    Totrem = 0; 
+
+    Totrem = 0;
     for (x=2; x < argc; x++) {
 	Currem_global = 0;
 	fprintf(stderr,"%s from \"%s\"... ",(DoCommon)?"Checking common":"Removing",argv[x]);fflush(stderr);
@@ -1941,7 +1941,7 @@ errexit:
 			break;
 		    case 2:
 			job->func = JOB_FINDDB;
-			job->db = db; 
+			job->db = db;
 			numline = Linecount;
 			break;
 		    default:
@@ -1990,15 +1990,15 @@ errexit:
 	if (Unique_global <= Totrem) break;
     }
     current_utc_time(&curtime);
-    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
     fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
     current_utc_time(&starttime);
     if (ProcMode == 1) {
 	fprintf(stderr,"Final sort ");fflush(stdout);
-	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem); 
+	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem);
 	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	fprintf(stderr,"in %.4f seconds\n",wtime);
 	current_utc_time(&starttime);
@@ -2066,7 +2066,7 @@ errexit:
 	    free(dbdata.data);
 	}
 	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
 	current_utc_time(&starttime);
@@ -2108,7 +2108,7 @@ errexit:
 			    newline = &Fileinmem[curpos*64+x];
 			    eol = findeol(newline,newline - Fileend);
 			    if (!eol) eol = newline;
-			    if (fwrite(newline,eol-newline,1,fo) != 1 || fputc('\n',fo) == EOF) {    
+			    if (fwrite(newline,eol-newline,1,fo) != 1 || fputc('\n',fo) == EOF) {
 				fprintf(stderr,"write error:");perror(argv[1]);
 				exit(1);
 			    }
@@ -2157,7 +2157,7 @@ errexit:
     }
     fclose(fo);
     current_utc_time(&curtime);
-    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0; 
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
     fprintf(stderr,"\nWrote %s lines in %.4f seconds\n",commify(Write_global),wtime);
 
@@ -2179,7 +2179,7 @@ errexit:
 
     return(0);
 }
-    
+
 
 
 
