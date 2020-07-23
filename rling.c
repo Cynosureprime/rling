@@ -13,7 +13,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#ifdef __FreeBSD__
+/* FreeBSD has the old-old DBM as default.  We want at least version 5 */
+#include <db5/db.h>
+#else
 #include <db.h>
+#endif
 
 #include "yarn.h"
 
@@ -101,11 +106,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.41 2020/07/23 06:01:17 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.42 2020/07/23 13:28:24 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
- * Revision 1.41  2020/07/23 06:01:17  dlr
- * More verbose duplicate messages
+ * Revision 1.42  2020/07/23 13:28:24  dlr
+ * Fixed typo on stdin for rli2.  Added additional error checks for the line
+ * length.  Line lengths are not limited, but there must be room in the cache
+ * for at least 2 lines.
  *
  * Revision 1.40  2020/07/23 05:45:27  dlr
  * add -2 to help
@@ -273,6 +280,20 @@ struct WorkUnit {
 struct DBSort {
     uint64_t line,len;
     char *key;
+};
+
+struct Infiles {
+    FILE *fi;
+    char *fn;
+    uint64_t line;
+    char *Buffer;
+    size_t size, curpos, end, eof, unique, dup;
+    char *curline;
+    uint64_t curlen;
+} *Infile;
+
+struct InHeap {
+    struct Infiles *In;
 };
 
 struct JOB {
@@ -1307,20 +1328,12 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 }
 
 
-struct Infiles {
-    FILE *fi;
-    char *fn;
-    uint64_t line;
-    char *Buffer;
-    size_t size, curpos, end, eof, unique, dup;
-    char *curline;
-    uint64_t curlen;
-} *Infile;
-struct InHeap {
-    struct Infiles *In;
-};
 
-
+/*
+ * heapcmp is used to compare two values on the "remove list" heap
+ * It puts the lowest value on the top, and sorts files which are
+ * at eof to the bottom of the heap
+ */
 int heapcmp(const void *a, const void *b) {
     struct InHeap *a1 = (struct InHeap *)a;
     struct InHeap *b1 = (struct InHeap *)b;
@@ -1338,6 +1351,15 @@ int heapcmp(const void *a, const void *b) {
     return(mystrcmp(a1->In->curline,b1->In->curline));
 }
 
+/*
+ * A classic, but still effective. 
+ * reheap takes an array arranged as a heap, and ensures that the lowest
+ * value is always at position 0 in the array.  This permits high
+ * performance for the rli2 function, regardless of how many files contain the
+ * sorted remove data.  As items are removed from the top of the heap (using
+ * getnextline, a single call to reheap will ensure that the "next" higher
+ * value is present on the top of the heap.
+ */
 void reheap(struct InHeap *InH, int cnt)
 {
     struct InHeap tmp;
@@ -1354,6 +1376,27 @@ void reheap(struct InHeap *InH, int cnt)
     }
 }
 
+/*
+ * getnextline processes an Infiles structure pointer, by
+ * 1. getting the next '\n' terminated line from the buffer
+ * 2. if there is not enough data in the buffer, moving the
+ *    last line, and what is available of the current line, to
+ *    the top of the buffer, adjusting counts, and reading the
+ *    opened file to fill the buffer.
+ * 3. Removing any '\r' immediately proceeding the '\n', and adjusting
+ *    the line length.  Note that the length it returns includes the 
+ *    '\n', so the minimum line length is 1, not 0.  A 0 line
+ *    length means that there is no more data, and should also have
+ *    the eof flag set.  This is redundant (setting the flag and returning
+ *    0 length line), and you should probably just drop the eof flag.
+ * 4. If Dedupe is set, this also skips (and counts) duplicate lines.
+ * 5. This also checks file order.  If lines are not in lexically sorted 
+ *    order, then the program will abend, and display the out-of-order
+ *    lines and line numbers.
+ * 6. If a line appears which is > half the buffer size (more or less),
+ *    then the program abends, and the user is encouraged to use a larger
+ *    buffer.
+ */
 void getnextline(struct Infiles *infile) {
     char *lastline,*eol;
     int lastlen, offset, len, res;
@@ -1401,6 +1444,12 @@ void getnextline(struct Infiles *infile) {
 	if (infile->curlen == 0)
 	    infile->eof = feof(infile->fi);
 	else {
+	    if (infile->curlen > ((infile->size/2)-5)) {
+		fprintf(stderr,"Line %"PRIu64" in \"%s\" is too long at %"PRIu64"\n",infile->line,infile->fn,infile->curlen);
+		fprintf(stderr,"Increase the memory available using -M\n");
+		fprintf(stderr,"Memory is set to %"PRIu64", so try -M %"PRIu64"\n",MaxMem, 2*MaxMem);
+		exit(1);
+	    }
 	    res = mystrcmp(lastline,infile->curline);
 	    if (res > 0) {
 		fprintf(stderr,"File \"%s\" is not in sorted order at line %"PRIu64"\n",infile->fn,infile->line);
@@ -1417,7 +1466,18 @@ void getnextline(struct Infiles *infile) {
     } while (1);
 }
 
+/*
+ * rliwrite will write a buffer to the cache in the supplie Infiles.
+ * If the cache is full, the data is flushed to the already-open file
+ * attached. You can flush the last cache by using a NULL buffer
+ * pointer.
+ */
 void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
+    if (len > outfile->size) {
+        fprintf(stderr,"You tried to write %"PRIu64" bytes, but the buffer size is %"PRIu64"\n",len,outfile->size);
+	fprintf(stderr,"Use -M option to make the buffers bigger\n");
+	exit(1);
+    }
     if (outfile->curpos+len > outfile->size || buf == NULL) {
 	if (outfile->curpos && fwrite(outfile->Buffer,outfile->curpos,1,outfile->fi) != 1) {
 	    fprintf(stderr,"Write error. Disk full?\n");
@@ -1435,6 +1495,43 @@ void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
 
 
 
+/*
+ * rli2 takes a list of filenames, in the order
+ * inputfile outputfile remove [remove...]
+ * It allocates space for the list of files, and divides up the total
+ * -M memory available (defauts to about 50 megabytes, via MAXCHUNK)
+ *  between all of the files to be used for local caches.
+ *  As each file is opened, the first block of the file is read, and
+ *  the first line located.  If the first line is too long (bigger than
+ *  half the buffer size, more or less) and error message is displayed,
+ *  and the program abends.
+ *
+ *  Once all of the files are opened, the "remove" files are arranged
+ *  as a heap, with the smallest lexical line being on top (just qsort,
+ *  as there is likely to be just a few.
+ *
+ *  Next, rli2 process each line from the input file, comparing it
+ *  against the top of the heap.  If a match is found then the matching
+ *  line is ether added to the output (if -c is in force), or discarded.
+ *  The next line is then read from input.
+ *
+ *  If the top of the heap is smaller than the current input line,
+ *  then the next line is read from that remove file, and the heap
+ *  adjusted.  This automatically merge-sorts the list of remove files.
+ *
+ *  If the top of the heap is bigger than the current input line, then the
+ *  current line is either written to the output, or discarded, depending 
+ *  on the -c flag.  This quickly spins through the input until we get
+ *  to the next matching "remove" line.
+ *
+ *  getnextline checks the input order of all of the files, and if any
+ *  are out of sort, so this mainline code can happily assume that
+ *  all files are perfectly sorted and ready to use.
+ *
+ *  Once all of the files are read, any last data is flushed, and
+ *  all the files are closed.
+ *  Allocated memory is not freed, since the next step is to exit
+ */
 void rli2(int argc, char **argv) {
     struct timespec starttime,curtime;
     double wtime;
@@ -1472,7 +1569,7 @@ void rli2(int argc, char **argv) {
 		Infile[x].fi = fopen(argv[x],"wb");
 	} else {
 	    if (strcmp(argv[x],"stdin") == 0)
-		Infile[x].fi = stdout;
+		Infile[x].fi = stdin;
 	    else
 		Infile[x].fi = fopen(argv[x],"rb");
 	}
@@ -1496,6 +1593,12 @@ void rli2(int argc, char **argv) {
 	    if (Infile[x].curlen == 0)
 		Infile[x].eof = 1;
 	    Infile[x].unique = Infile[x].line = 1;
+	    if (Infile[x].curlen > ((Infile[x].size/2)-5)) {
+		fprintf(stderr,"Line %"PRIu64" in \"%s\" is too long at %"PRIu64"\n",Infile[x].line,Infile[x].fn,Infile[x].curlen);
+		fprintf(stderr,"Increase the memory available using -M\n");
+		fprintf(stderr,"Memory is set to %"PRIu64", so try -M %"PRIu64"\n",MaxMem, 2*MaxMem);
+		exit(1);
+	    }
 	}
 	if (x>1) {
 	    heap[x-2].In = &Infile[x];
