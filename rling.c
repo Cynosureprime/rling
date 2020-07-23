@@ -101,9 +101,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.38 2020/07/23 05:11:29 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.39 2020/07/23 05:41:21 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.39  2020/07/23 05:41:21  dlr
+ * Ensure -n and -d dedupe code works for -2 as well.
+ *
  * Revision 1.38  2020/07/23 05:11:29  dlr
  * Improve rli2 messages and add time info
  *
@@ -1347,57 +1350,61 @@ void reheap(struct InHeap *InH, int cnt)
 
 void getnextline(struct Infiles *infile) {
     char *lastline,*eol;
-    int lastlen, offset, len;
-
-    if (infile->curpos >= infile->end && infile->eof) {
-	infile->curlen = 0;
-	return;
-    }
-    lastline = infile->curline;
-    lastlen = infile->curlen;
-    infile->curline = &infile->Buffer[infile->curpos];
-    eol = findeol(infile->curline,infile->end - infile->curpos);
-    if (!eol) { /* Can't find eol? */
-	offset = lastline - infile->Buffer;
-	len = &infile->Buffer[infile->end]-lastline;
-	memmove(infile->Buffer,lastline,len);
-	lastline -= offset;
-	infile->curline -= offset;
-	infile->curpos -= offset;
-	infile->end -= offset;
-	len = fread(&infile->Buffer[infile->end],1,infile->size-infile->end,infile->fi);
-	infile->end += len;
-        infile->Buffer[infile->end] = '\n';
-	if (len == 0)
-	    infile->eof = feof(infile->fi);
+    int lastlen, offset, len, res;
+    do {
+	if (infile->curpos >= infile->end && infile->eof) {
+	    infile->curlen = 0;
+	    return;
+	}
+	lastline = infile->curline;
+	lastlen = infile->curlen;
+	infile->curline = &infile->Buffer[infile->curpos];
 	eol = findeol(infile->curline,infile->end - infile->curpos);
-	if (!eol) {
-	    if (infile->end >= infile->curpos)
-	        eol = &infile->Buffer[infile->end];
-	    else
-		eol = infile->curline;
+	if (!eol) { /* Can't find eol? */
+	    offset = lastline - infile->Buffer;
+	    len = &infile->Buffer[infile->end]-lastline;
+	    memmove(infile->Buffer,lastline,len);
+	    lastline -= offset;
+	    infile->curline -= offset;
+	    infile->curpos -= offset;
+	    infile->end -= offset;
+	    len = fread(&infile->Buffer[infile->end],1,infile->size-infile->end,infile->fi);
+	    infile->end += len;
+	    infile->Buffer[infile->end] = '\n';
+	    if (len == 0)
+		infile->eof = feof(infile->fi);
+	    eol = findeol(infile->curline,infile->end - infile->curpos);
+	    if (!eol) {
+		if (infile->end >= infile->curpos)
+		    eol = &infile->Buffer[infile->end];
+		else
+		    eol = infile->curline;
+	    }
 	}
-    }
-    infile->curlen = eol - infile->curline +1;
-    if (infile->curpos >= infile->end) {
-	infile->curlen = 0;
-	infile->eof = feof(infile->fi);
-	return;
-    }
-    infile->line++;
-    infile->curpos +=  infile->curlen;
-    if (eol > infile->curline && eol[-1] == '\r') {
-	eol[-1] = '\n'; infile->curlen--;
-    }
-    if (infile->curlen == 0)
-	infile->eof = feof(infile->fi);
-    else {
-	if (mystrcmp(lastline,infile->curline) > 0) {
-	    fprintf(stderr,"File \"%s\" is not in sorted order at line %"PRIu64"\n",infile->fn,infile->line);
-	    fprintf(stderr,"Line %"PRIu64": ",infile->line-1);prstr(lastline,lastlen);
-	    fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
+	infile->curlen = eol - infile->curline +1;
+	if (infile->curpos >= infile->end) {
+	    infile->curlen = 0;
+	    infile->eof = feof(infile->fi);
+	    return;
 	}
-    }
+	infile->line++;
+	infile->curpos +=  infile->curlen;
+	if (eol > infile->curline && eol[-1] == '\r') {
+	    eol[-1] = '\n'; infile->curlen--;
+	}
+	if (infile->curlen == 0)
+	    infile->eof = feof(infile->fi);
+	else {
+	    res = mystrcmp(lastline,infile->curline);
+	    if (res > 0) {
+		fprintf(stderr,"File \"%s\" is not in sorted order at line %"PRIu64"\n",infile->fn,infile->line);
+		fprintf(stderr,"Line %"PRIu64": ",infile->line-1);prstr(lastline,lastlen);
+		fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
+		exit(1);
+	    }
+	    if (Dedupe == 0 || res != 0) return;
+	}
+    } while (1);
 }
 
 void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
