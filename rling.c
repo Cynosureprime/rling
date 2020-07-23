@@ -101,9 +101,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.39 2020/07/23 05:41:21 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.40 2020/07/23 05:45:27 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.40  2020/07/23 05:45:27  dlr
+ * add -2 to help
+ *
  * Revision 1.39  2020/07/23 05:41:21  dlr
  * Ensure -n and -d dedupe code works for -2 as well.
  *
@@ -1642,6 +1645,7 @@ errexit:
 		fprintf(stderr,"\t-p prime\tForce size of hash table\n");
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
 		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory)\n");
+		fprintf(stderr,"\t-2\t\tUse rli2 mode - all files must be sorted. Low mem usage.\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
 		fprintf(stderr,"\t-T path\t\tDirectory to store temp files in\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
@@ -1664,6 +1668,7 @@ errexit:
 	    case '2':
 		ProcMode = 3;
 		break;
+
 	    case 'c':
 		DoCommon = 1;
 		fprintf(stderr,"Will output lines common to input and remove files\n");
