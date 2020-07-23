@@ -101,9 +101,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.40 2020/07/23 05:45:27 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.41 2020/07/23 06:01:17 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.41  2020/07/23 06:01:17  dlr
+ * More verbose duplicate messages
+ *
  * Revision 1.40  2020/07/23 05:45:27  dlr
  * add -2 to help
  *
@@ -1309,7 +1312,7 @@ struct Infiles {
     char *fn;
     uint64_t line;
     char *Buffer;
-    size_t size, curpos, end, eof;
+    size_t size, curpos, end, eof, unique, dup;
     char *curline;
     uint64_t curlen;
 } *Infile;
@@ -1405,6 +1408,10 @@ void getnextline(struct Infiles *infile) {
 		fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
 		exit(1);
 	    }
+	    if (res ==0) 
+		infile->dup++;
+	    else
+		infile->unique++;
 	    if (Dedupe == 0 || res != 0) return;
 	}
     } while (1);
@@ -1488,7 +1495,7 @@ void rli2(int argc, char **argv) {
 	    }
 	    if (Infile[x].curlen == 0)
 		Infile[x].eof = 1;
-	    Infile[x].line = 1;
+	    Infile[x].unique = Infile[x].line = 1;
 	}
 	if (x>1) {
 	    heap[x-2].In = &Infile[x];
@@ -1540,7 +1547,7 @@ void rli2(int argc, char **argv) {
 		    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 		    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 		    fprintf(stderr,
-			    "%s file \"%s\" complete. %"PRIu64" lines, %.4f seconds elapsed\n",(DoCommon)?"Common":"Remove",heap[0].In->fn,heap[0].In->line,wtime);
+			    "%s file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines, %.4f seconds elapsed\n",(DoCommon)?"Common":"Remove",heap[0].In->fn,heap[0].In->unique,heap[0].In->dup,wtime);
 		}
 		reheap(heap,heapcnt);
 	    }
@@ -1557,7 +1564,7 @@ void rli2(int argc, char **argv) {
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-    fprintf(stderr,"Input file \"%s\" complete. %"PRIu64" lines read. %.4f seconds elapsed\n",Infile[0].fn,Infile[0].line,wtime);
+    fprintf(stderr,"Input file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines) read. %.4f seconds elapsed\n",Infile[0].fn,Infile[0].unique,Infile[0].dup,wtime);
     fprintf(stderr,"%s total lines written, %"PRIu64" lines %s\n",commify(Write),rem,(DoCommon)?"in common":"removed");
     for (x=0; x < argc; x++) {
 	fclose(Infile[x].fi);
