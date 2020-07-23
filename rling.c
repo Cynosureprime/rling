@@ -989,7 +989,7 @@ MDXALIGN void procjob(void *dummy) {
 			RC = (uint64_t)Sortlist[index];
 		        if (DoCommon) {
 			    RC &= 0x7fffffffffffffffL;
-			    if(Commontest(RC-(uint64_t)Fileinmem) == 0) 
+			    if(Commontest(RC-(uint64_t)Fileinmem) == 0)
 				continue;
 			} else {
 			    if (RC & 0x8000000000000000L) continue;
@@ -1333,7 +1333,7 @@ void reheap(struct InHeap *InH, int cnt)
 {
     struct InHeap tmp;
     int child, parent;
-    
+
     parent = 0;
     while ((child = (parent*2)+1) < cnt) {
         if ((child+1) < cnt && heapcmp(&InH[child],&InH[child+1]) >0)
@@ -1368,13 +1368,13 @@ void getnextline(struct Infiles *infile) {
 	len = fread(&infile->Buffer[infile->end],1,infile->size-infile->end,infile->fi);
 	infile->end += len;
         infile->Buffer[infile->end] = '\n';
-	if (len == 0) 
+	if (len == 0)
 	    infile->eof = feof(infile->fi);
 	eol = findeol(infile->curline,infile->end - infile->curpos);
 	if (!eol) {
 	    if (infile->end >= infile->curpos)
 	        eol = &infile->Buffer[infile->end];
-	    else 
+	    else
 		eol = infile->curline;
 	}
     }
@@ -1449,12 +1449,12 @@ void rli2(int argc, char **argv) {
 	}
 	Infile[x].fn = argv[x];
 	if (x == 1) {
-	    if (strcmp(argv[x],"stdout") == 0) 
+	    if (strcmp(argv[x],"stdout") == 0)
 		Infile[x].fi = stdout;
 	    else
 		Infile[x].fi = fopen(argv[x],"wb");
 	} else {
-	    if (strcmp(argv[x],"stdin") == 0) 
+	    if (strcmp(argv[x],"stdin") == 0)
 		Infile[x].fi = stdout;
 	    else
 		Infile[x].fi = fopen(argv[x],"rb");
@@ -1476,7 +1476,7 @@ void rli2(int argc, char **argv) {
 	    if (eol > Infile[x].curline && eol[-1] == '\r') {
 		eol[-1] = '\n'; Infile[x].curlen--;
 	    }
-	    if (Infile[x].curlen == 0) 
+	    if (Infile[x].curlen == 0)
 		Infile[x].eof = 1;
 	    Infile[x].line = 1;
 	}
@@ -1484,8 +1484,8 @@ void rli2(int argc, char **argv) {
 	    heap[x-2].In = &Infile[x];
 	}
     }
-    
-    
+
+
     qsort(heap,heapcnt,sizeof(struct InHeap),heapcmp);
 
     for (x=0 ; x < 4; x++) {
@@ -1636,7 +1636,7 @@ errexit:
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
 		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory)\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
-		fprintf(stderr,"\t-T path\tDirectory to store temp files in\n");
+		fprintf(stderr,"\t-T path\t\tDirectory to store temp files in\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
 		fprintf(stderr,"\n\tstdin and stdout can be used in the place of any filename\n");
 		exit(1);
