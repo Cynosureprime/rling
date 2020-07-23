@@ -101,9 +101,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.36 2020/07/22 13:49:16 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.37 2020/07/23 04:27:33 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.37  2020/07/23 04:27:33  dlr
+ * Add -s option to allow sorted output in all modes.  Added rli2 suport,
+ * with the -2 option, so you can process lists of sorted files.
+ *
  * Revision 1.36  2020/07/22 13:49:16  dlr
  * Chavnge from leveldb to Berkeley db for a 3x improvement in performance.
  *
@@ -311,7 +315,7 @@ char TempPath[MDXMAXPATHLEN+16];
 
 char *Fileinmem, *Fileend;
 uint64_t Filesize;
-uint64_t WorkUnitLine, WorkUnitSize;
+uint64_t WorkUnitLine, WorkUnitSize, MaxMem;
 char **Sortlist;
 
 struct Memscale {
@@ -361,10 +365,11 @@ struct Linelist **HashLine;
 
 
 int Dedupe = 1;
-int DoCommon = 0;
+int DoCommon = 0, SortOut = 0;
 uint64_t *Common, *Bloom;
 #define Commonset(offset) {__sync_or_and_fetch(&Common[(uint64_t)(offset)/64],(uint64_t)1L << ((uint64_t)(offset) & 0x3f)); }
 #define Bloomset(offset) (__sync_fetch_and_or(&Bloom[(uint64_t)(offset)/64],(uint64_t)1L << ((uint64_t)(offset) & 0x3f)) & ((uint64_t)1L <<((uint64_t)(offset) & 0x3f)))
+#define Commontest(offset) (Common[(uint64_t)(offset)/64] & (uint64_t)1L << ((uint64_t)(offset) & 0x3f))
 
 /*
  * MarkD(pointer to char*, 64 bit value)
@@ -573,8 +578,10 @@ int mystrcmp(const char *a, const char *b) {
  * bit in case one ore more of the strings are in the deleted state.
  */
 int comp1(const void *a, const void *b) {
-    char *a1 = (char *)(((uint64_t)*((char **)a)) & 0x7fffffffffffffffL);
-    char *b1 = (char *)(((uint64_t)*((char **)b)) & 0x7fffffffffffffffL);
+    char *a1 = *((char **)a);
+    char *b1 = *((char **)b);
+    a1 = (char *)((uint64_t)a1 & 0x7fffffffffffffffL);
+    b1 = (char *)((uint64_t)b1 & 0x7fffffffffffffffL);
     return(mystrcmp(a1,b1));
 }
 /*
@@ -976,31 +983,56 @@ MDXALIGN void procjob(void *dummy) {
 	    case JOB_WRITE:
 		unique = 0;
 		thisend = (uint64_t)Fileend;
-	        for (index=job->start;index < job->end; index++) {
-		    RC = (uint64_t)Sortlist[index];
-		    if (!(RC & 0x8000000000000000L)) break;
-		}
-		thisnum = (((uint64_t)Sortlist[index]) & 0x7fffffffffffffffL);
-		newline = (char *)thisnum;
-		for (; index < job->end; index++) {
-		    RC = (uint64_t)Sortlist[index];
-		    if (!(RC & 0x8000000000000000L)) {
+		if (DoCommon || SortOut) {
+		    possess(Common_lock);
+		    wait_for(Common_lock, TO_BE, job->startline);
+		    for (index = job->start; index < job->end; index++) {
+			RC = (uint64_t)Sortlist[index];
+		        if (DoCommon) {
+			    RC &= 0x7fffffffffffffffL;
+			    if(Commontest(RC-(uint64_t)Fileinmem) == 0) 
+				continue;
+			} else {
+			    if (RC & 0x8000000000000000L) continue;
+			}
 			unique++;
 			key= (char*)RC;
-		        eol = findeol(key,thisend-RC);
+			eol = findeol(key,thisend-RC);
 			if (!eol) eol = (char *)thisend;
 			llen = eol-key;
-			if (llen && key != newline) memcpy(newline,key,llen);
-			newline[llen] = '\n'; newline += llen + 1;
+			if (fwrite(key,llen+1,1,job->fo) != 1) {
+			    fprintf(stderr,"Write error. Disk full?");
+			    perror(job->fn);
+			    exit(1);
+			}
 		    }
-		}
-		possess(Common_lock);
-		key = (char *)thisnum;
-		wait_for(Common_lock, TO_BE, job->startline);
-		if ((newline-key) && fwrite(key,newline-key,1,job->fo) != 1) {
-		    fprintf(stderr,"Write error. Disk full?\n");
-		    perror(job->fn);
-		    exit(1);
+		} else {
+		    for (index=job->start;index < job->end; index++) {
+			RC = (uint64_t)Sortlist[index];
+			if (!(RC & 0x8000000000000000L)) break;
+		    }
+		    thisnum = (((uint64_t)Sortlist[index]) & 0x7fffffffffffffffL);
+		    newline = (char *)thisnum;
+		    for (; index < job->end; index++) {
+			RC = (uint64_t)Sortlist[index];
+			if (!(RC & 0x8000000000000000L)) {
+			    unique++;
+			    key= (char*)RC;
+			    eol = findeol(key,thisend-RC);
+			    if (!eol) eol = (char *)thisend;
+			    llen = eol-key;
+			    if (llen && key != newline) memcpy(newline,key,llen);
+			    newline[llen] = '\n'; newline += llen + 1;
+			}
+		    }
+		    possess(Common_lock);
+		    key = (char *)thisnum;
+		    wait_for(Common_lock, TO_BE, job->startline);
+		    if ((newline-key) && fwrite(key,newline-key,1,job->fo) != 1) {
+			fprintf(stderr,"Write error. Disk full?\n");
+			perror(job->fn);
+			exit(1);
+		    }
 		}
 		fflush(job->fo);
 		Write_global += unique;
@@ -1267,6 +1299,225 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 }
 
 
+struct Infiles {
+    FILE *fi;
+    char *fn;
+    uint64_t line;
+    char *Buffer;
+    size_t size, curpos, end, eof;
+    char *curline;
+    uint64_t curlen;
+} *Infile;
+struct InHeap {
+    struct Infiles *In;
+};
+
+
+int heapcmp(const void *a, const void *b) {
+    struct InHeap *a1 = (struct InHeap *)a;
+    struct InHeap *b1 = (struct InHeap *)b;
+    if (a1->In->eof || b1->In->eof) {
+	if (a1->In->eof && b1->In->eof)
+	    return (0);
+        if (a1->In->eof) return(1);
+	return(-1);
+    }
+    if (a1->In->curlen == 0 || b1->In->curlen == 0) {
+	if (a1->In->curlen < b1->In->curlen) return(1);
+	if (a1->In->curlen > b1->In->curlen) return(-1);
+	return(0);
+    }
+    return(mystrcmp(a1->In->curline,b1->In->curline));
+}
+
+void reheap(struct InHeap *InH, int cnt)
+{
+    struct InHeap tmp;
+    int child, parent;
+    
+    parent = 0;
+    while ((child = (parent*2)+1) < cnt) {
+        if ((child+1) < cnt && heapcmp(&InH[child],&InH[child+1]) >0)
+            child++;
+        if (heapcmp(&InH[child],&InH[parent]) < 0) {
+            tmp = InH[child];InH[child]=InH[parent];InH[parent]=tmp;
+            parent = child;
+        } else break;
+    }
+}
+
+void getnextline(struct Infiles *infile) {
+    char *lastline,*eol;
+    int lastlen, offset, len;
+
+    if (infile->curpos >= infile->end && infile->eof) {
+	infile->curlen = 0;
+	return;
+    }
+    lastline = infile->curline;
+    lastlen = infile->curlen;
+    infile->curline = &infile->Buffer[infile->curpos];
+    eol = findeol(infile->curline,infile->end - infile->curpos);
+    if (!eol) { /* Can't find eol? */
+	offset = lastline - infile->Buffer;
+	len = &infile->Buffer[infile->end]-lastline;
+	memmove(infile->Buffer,lastline,len);
+	lastline -= offset;
+	infile->curline -= offset;
+	infile->curpos -= offset;
+	infile->end -= offset;
+	len = fread(&infile->Buffer[infile->end],1,infile->size-infile->end,infile->fi);
+	infile->end += len;
+        infile->Buffer[infile->end] = '\n';
+	if (len == 0) 
+	    infile->eof = feof(infile->fi);
+	eol = findeol(infile->curline,infile->end - infile->curpos);
+	if (!eol) {
+	    if (infile->end >= infile->curpos)
+	        eol = &infile->Buffer[infile->end];
+	    else 
+		eol = infile->curline;
+	}
+    }
+    infile->curlen = eol - infile->curline +1;
+    if (infile->curpos >= infile->end) {
+	infile->curlen = 0;
+	infile->eof = feof(infile->fi);
+	return;
+    }
+    infile->line++;
+    infile->curpos +=  infile->curlen;
+    if (eol > infile->curline && eol[-1] == '\r') {
+	eol[-1] = '\n'; infile->curlen--;
+    }
+    if (infile->curlen == 0)
+	infile->eof = feof(infile->fi);
+    else {
+	if (mystrcmp(lastline,infile->curline) > 0) {
+	    fprintf(stderr,"File \"%s\" is not in sorted order at line %"PRIu64"\n",infile->fn,infile->line);
+	    fprintf(stderr,"Line %"PRIu64": ",infile->line-1);prstr(lastline,lastlen);
+	    fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
+	}
+    }
+}
+
+void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
+    if (outfile->curpos+len > outfile->size || buf == NULL) {
+	if (fwrite(outfile->Buffer,outfile->curpos,1,outfile->fi) != 1) {
+	    fprintf(stderr,"Write error. Disk full?\n");
+	    perror(outfile->fn);
+	    exit(1);
+	}
+	outfile->curpos = 0;
+    }
+    if (buf == NULL) return;
+    memcpy(&outfile->Buffer[outfile->curpos],buf,len);
+    outfile->curpos += len;
+}
+
+
+
+
+
+void rli2(int argc, char **argv) {
+    int x, res;
+    int64_t lsize, llen;
+    char *eol,*linein;
+    struct InHeap *heap;
+    int heapcnt = argc-2;
+
+    lsize = MaxMem / argc;
+    Infile = calloc(sizeof(struct Infiles),argc);
+    heap = calloc(sizeof(struct InHeap),heapcnt);
+    if (!Infile || !heap) {
+	fprintf(stderr,"Out of memory initializing structures\n");
+	exit(1);
+    }
+    for (x=0; x < argc; x++) {
+	Infile[x].size = lsize;
+	Infile[x].Buffer = calloc(lsize+16,1);
+	if (!Infile[x].Buffer) {
+	    fprintf(stderr,"Could not allocate %"PRIu64" bytes for I/O buffer\n",(uint64_t)lsize);
+	    exit(1);
+	}
+	Infile[x].fn = argv[x];
+	if (x == 1) {
+	    if (strcmp(argv[x],"stdout") == 0) 
+		Infile[x].fi = stdout;
+	    else
+		Infile[x].fi = fopen(argv[x],"wb");
+	} else {
+	    if (strcmp(argv[x],"stdin") == 0) 
+		Infile[x].fi = stdout;
+	    else
+		Infile[x].fi = fopen(argv[x],"rb");
+	}
+	if (Infile[x].fi == NULL) {
+	    fprintf(stderr,"Can't open \"%s\"\n",argv[x]);
+	    perror(argv[x]);
+	    exit(1);
+	}
+	if (x != 1) {
+	    Infile[x].end = fread(Infile[x].Buffer,1,lsize,Infile[x].fi);
+	    Infile[x].Buffer[Infile[x].end] = '\n';
+	    if (Infile[x].end == 0) Infile[x].eof = feof(Infile[x].fi);
+	    Infile[x].curline = Infile[x].Buffer;
+	    eol = findeol(Infile[x].Buffer,Infile[x].end);
+	    if (!eol) eol = &Infile[x].Buffer[Infile[x].end];
+	    Infile[x].curlen = eol - Infile[x].curline + 1;
+	    Infile[x].curpos = Infile[x].curlen;
+	    if (eol > Infile[x].curline && eol[-1] == '\r') {
+		eol[-1] = '\n'; Infile[x].curlen--;
+	    }
+	    if (Infile[x].curlen == 0) 
+		Infile[x].eof = 1;
+	    Infile[x].line = 1;
+	}
+	if (x>1) {
+	    heap[x-2].In = &Infile[x];
+	}
+    }
+    
+    
+    qsort(heap,heapcnt,sizeof(struct InHeap),heapcmp);
+    while (Infile[0].curlen && Infile[0].eof == 0) {
+	if (heap[0].In->curlen && heap[0].In->eof == 0) {
+	    res = mystrcmp(Infile[0].curline,heap[0].In->curline);
+	    if (res == 0) {
+		if (DoCommon)
+		    rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
+		getnextline(&Infile[0]);
+		continue;
+	    }
+	    if (res < 0) {
+		if (DoCommon == 0)
+		    rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
+		getnextline(&Infile[0]);
+		continue;
+	    }
+	    if (res > 0) {
+		getnextline(heap[0].In);
+		reheap(heap,heapcnt);
+	    }
+	} else {
+	    if (DoCommon == 0)
+		rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
+	    getnextline(&Infile[0]);
+	    continue;
+	}
+    }
+    rliwrite(&Infile[1],NULL,0);
+    for (x=0; x < argc; x++) {
+	fclose(Infile[x].fi);
+    }
+
+}
+
+
+
+
+
+
 
 
 /* The mainline code.  Yeah, it's ugly, dresses poorly, and smells funny.
@@ -1277,7 +1528,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 int main(int argc, char **argv) {
     struct timespec starttime,curtime;
     double wtime;
-    int64_t llen, MaxMem;
+    int64_t llen;
     uint64_t Line, Estline,  RC, Totrem;
     uint64_t work,curpos, thisnum, Currem, mask;
     struct Linelist *cur, *next;
@@ -1309,6 +1560,7 @@ int main(int argc, char **argv) {
     strcpy(TempPath,".");
     ErrCheck = 1;
     DoDebug = 0;
+    SortOut = 0;
     Maxdepth_global = 0;
     Workthread = 0;
     last = 99;
@@ -1318,9 +1570,9 @@ int main(int argc, char **argv) {
     Maxt = get_nprocs();
     current_utc_time(&starttime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?hbficdnvt:p:T:M:")) != -1) {
+    while ((ch = getopt(argc, argv, "?2hbsficdnvt:p:T:M:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?hbficdnvt:p:T:M:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?2hbsficdnvt:p:T:M:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -1336,6 +1588,7 @@ errexit:
 		fprintf(stderr,"\t-d\t\tRemoves duplicate lines from input (on by default)\n");
 		fprintf(stderr,"\t-n\t\tDo not remove duplicate lines from input\n");
 		fprintf(stderr,"\t-c\t\tOutput lines common to input and remove files\n");
+		fprintf(stderr,"\t-s\t\tSort output. Default is input order.\n\t\t\tThis will make the -b and -f options substantially faster\n");
 		fprintf(stderr,"\t-t number\tNumber of threads to use\n");
 		fprintf(stderr,"\t-p prime\tForce size of hash table\n");
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
@@ -1351,10 +1604,17 @@ errexit:
 	        ProcMode = 1;
 		break;
 
+	    case 's':
+		SortOut = 1;
+		break;
+
 	    case 'f':
 		ProcMode = 2;
 		break;
 
+	    case '2':
+		ProcMode = 3;
+		break;
 	    case 'c':
 		DoCommon = 1;
 		fprintf(stderr,"Will output lines common to input and remove files\n");
@@ -1457,6 +1717,14 @@ errexit:
 		exit(1);
 	    }
 	}
+    }
+    if (ProcMode == 3) {
+	if (argc < 3) {
+	    fprintf(stderr,"Need at least an input, output and remove file for sorted remove mode\n");
+	    exit(1);
+	}
+	rli2(argc,argv);
+	exit(0);
     }
 
     Readbuf = malloc(MAXCHUNK+16);
@@ -1994,7 +2262,17 @@ errexit:
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
     fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
     current_utc_time(&starttime);
-    if (ProcMode == 1) {
+    if (ProcMode == 0 && SortOut) {
+	fprintf(stderr,"Final sort ");fflush(stdout);
+	forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
+	qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"in %.4f seconds\n",wtime);
+	current_utc_time(&starttime);
+    }
+    if (ProcMode == 1 && SortOut == 0) {
 	fprintf(stderr,"Final sort ");fflush(stdout);
 	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem);
 	current_utc_time(&curtime);
@@ -2019,141 +2297,155 @@ errexit:
     Currem = 0;
     if (ProcMode == 2) {
 
-	if ((x = db_create(&dbo, NULL,0))) {
-	    fprintf(stderr,"db_create: %s\n",db_strerror(x));
-	    exit(1);
-	}
-	dbo->set_pagesize(dbo,32768);
-	dbo->set_cachesize(dbo,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
-	dbo->set_bt_compare(dbo,comp4);
-	if ((x = dbo->open(dbo, NULL,DBOUT,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
-	    fprintf(stderr,"Could not create database \"%s\"\n",DBOUT);
-	    fprintf(stderr,"db_open: %s\n",db_strerror(x));
-	    exit(1);
-	}
-
-	if ((x = db->cursor(db,NULL,&dbcur,0))) {
-	    fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
-	    exit(1);
-	}
-	fprintf(stderr,"Building final output\n");
 	memset(&dbkey,0,sizeof(dbkey));
 	memset(&dbdata,0,sizeof(dbdata));
 	dbkey.flags = DB_DBT_MALLOC;
 	dbdata.flags = DB_DBT_MALLOC;
-	while (1) {
-	    x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
-	    if (x) {
-		if (x == DB_NOTFOUND) break;
-		fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+	if (SortOut == 0) {
+	    if ((x = db_create(&dbo, NULL,0))) {
+		fprintf(stderr,"db_create: %s\n",db_strerror(x));
 		exit(1);
 	    }
-	    if (DoCommon && dbdata.size == 8) {
-		work = *(uint64_t *)dbdata.data;
-		if ((Common[work/64] & (uint64_t)1L << (work&0x3f)) == 0) {
+	    dbo->set_pagesize(dbo,32768);
+	    dbo->set_cachesize(dbo,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
+	    dbo->set_bt_compare(dbo,comp4);
+	    if ((x = dbo->open(dbo, NULL,DBOUT,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
+		fprintf(stderr,"Could not create database \"%s\"\n",DBOUT);
+		fprintf(stderr,"db_open: %s\n",db_strerror(x));
+		exit(1);
+	    }
+
+	    if ((x = db->cursor(db,NULL,&dbcur,0))) {
+		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    fprintf(stderr,"Building final output\n");
+	    while (1) {
+		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+		if (x) {
+		    if (x == DB_NOTFOUND) break;
+		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+		if (DoCommon && dbdata.size == 8) {
+		    work = *(uint64_t *)dbdata.data;
+		    if (Commontest(work) == 0) {
+			free(dbkey.data);
+			free(dbdata.data);
+			continue;
+		    }
+		}
+		x = dbo->put(dbo,NULL,&dbdata,&dbkey,0);
+
+		if (x) {
+		    fprintf(stderr,"Can't write final database.  Disk full?\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+		free(dbkey.data);
+		free(dbdata.data);
+	    }
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
+	    current_utc_time(&starttime);
+	    dbcur->c_close(dbcur);
+	    db->close(db,0);
+	    unlink(DBNAME);
+	    if ((x = dbo->cursor(dbo,NULL,&dbcur,0))) {
+		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
+	    Write_global = 0;
+	    while (1) {
+		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+		if (x) {
+		    if (x == DB_NOTFOUND) break;
+		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+
+		if (fwrite(dbdata.data,dbdata.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
+		    fprintf(stderr,"Write failed to output file.  Disk full?\n");
+		    exit(1);
+		}
+		free(dbkey.data);
+		free(dbdata.data);
+		Write_global++;
+	    }
+	    dbcur->close(dbcur);
+	    dbo->close(dbo,0);
+	    unlink(DBOUT);
+	} else {
+	    if ((x = db->cursor(db,NULL,&dbcur,0))) {
+		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
+	    Write_global = 0;
+	    while (1) {
+		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+		if (x) {
+		    if (x == DB_NOTFOUND) break;
+		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+		if (DoCommon && Commontest(*(uint64_t *)dbdata.data) == 0) {
 		    free(dbkey.data);
 		    free(dbdata.data);
 		    continue;
 		}
+		if (fwrite(dbkey.data,dbkey.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
+		    fprintf(stderr,"Write failed to output file.  Disk full?\n");
+		    exit(1);
+		}
+		Write_global++;
+		free(dbkey.data);
+		free(dbdata.data);
 	    }
-	    x = dbo->put(dbo,NULL,&dbdata,&dbkey,0);
+	    dbcur->close(dbcur);
+	    db->close(db,0);
+	    unlink(DBNAME);
+	}
 
-	    if (x) {
-		fprintf(stderr,"Can't write final database.  Disk full?\n%s\n",db_strerror(x));
-		exit(1);
-	    }
-	    free(dbkey.data);
-	    free(dbdata.data);
-	}
-	current_utc_time(&curtime);
-	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
-	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
-	current_utc_time(&starttime);
-	dbcur->c_close(dbcur);
-	db->close(db,0);
-	unlink(DBNAME);
-	if ((x = dbo->cursor(dbo,NULL,&dbcur,0))) {
-	    fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
-	    exit(1);
-	}
-        fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	Write_global = 0;
-	while (1) {
-	    x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
-	    if (x) {
-		if (x == DB_NOTFOUND) break;
-		fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
-		exit(1);
-	    }
-	    if (fwrite(dbdata.data,dbdata.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
-		fprintf(stderr,"Write failed to output file.  Disk full?\n");
-		exit(1);
-	    }
-	    free(dbkey.data);
-	    free(dbdata.data);
-	    Write_global++;
-	}
-	dbcur->close(dbcur);
-	dbo->close(dbo,0);
-	unlink(DBOUT);
     } else {
         fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	if (DoCommon) {
-	    for (curpos = 0; curpos < (filesize/64 + 1);curpos++) {
-		if ((RC = Common[curpos])) {
-		    for (x=0; RC && x < 64; x++, RC = RC >> 1) {
-			if (RC &1) {
-			    Currem++;
-			    newline = &Fileinmem[curpos*64+x];
-			    eol = findeol(newline,newline - Fileend);
-			    if (!eol) eol = newline;
-			    if (fwrite(newline,eol-newline,1,fo) != 1 || fputc('\n',fo) == EOF) {
-				fprintf(stderr,"write error:");perror(argv[1]);
-				exit(1);
-			    }
-			}
-		    }
-		}
-	    }
-	    Write_global = Currem;
-	} else {
-	    work = Line / Maxt;
-	    if (work < Maxt) work = Line;
-	    curline = 1;
-	    possess(Common_lock);
-	    Write_global = 0;
-	    twist(Common_lock,TO,curline);
-	    for (curpos=0; curpos < Line; curpos += work) {
-		possess(FreeWaiting);
-		wait_for(FreeWaiting, NOT_TO_BE,0);
-		job = FreeHead;
-		FreeHead = job->next;
-		if (FreeHead == NULL) FreeTail = &FreeHead;
-		twist(FreeWaiting, BY, -1);
-		job->next = NULL;
-		job->func = JOB_WRITE;
-		job->fo = fo;
-		job->fn = argv[1];
-		job->startline = curline++;
-		job->start = curpos;
-		job->end = curpos + work;
-		if (job->end > Line) job->end = Line;
-		if (Workthread < Maxt) {
-		    launch(procjob,NULL);
-		    Workthread++;
-		}
-		possess(WorkWaiting);
-		*WorkTail = job;
-		WorkTail = &(job->next);
-		twist(WorkWaiting,BY,+1);
-	    }
+	work = Line / Maxt;
+	if (work < Maxt) work = Line;
+	curline = 1;
+	possess(Common_lock);
+	Write_global = 0;
+	twist(Common_lock,TO,curline);
+	for (curpos=0; curpos < Line; curpos += work) {
 	    possess(FreeWaiting);
-	    wait_for(FreeWaiting,TO_BE,Maxt);
-	    release(FreeWaiting);
-	    possess(Common_lock);
-	    release(Common_lock);
+	    wait_for(FreeWaiting, NOT_TO_BE,0);
+	    job = FreeHead;
+	    FreeHead = job->next;
+	    if (FreeHead == NULL) FreeTail = &FreeHead;
+	    twist(FreeWaiting, BY, -1);
+	    job->next = NULL;
+	    job->func = JOB_WRITE;
+	    job->fo = fo;
+	    job->fn = argv[1];
+	    job->startline = curline++;
+	    job->start = curpos;
+	    job->end = curpos + work;
+	    if (job->end > Line) job->end = Line;
+	    if (Workthread < Maxt) {
+		launch(procjob,NULL);
+		Workthread++;
+	    }
+	    possess(WorkWaiting);
+	    *WorkTail = job;
+	    WorkTail = &(job->next);
+	    twist(WorkWaiting,BY,+1);
 	}
+	possess(FreeWaiting);
+	wait_for(FreeWaiting,TO_BE,Maxt);
+	release(FreeWaiting);
+	possess(Common_lock);
+	release(Common_lock);
     }
     fclose(fo);
     current_utc_time(&curtime);
