@@ -101,12 +101,11 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.37 2020/07/23 04:27:33 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.38 2020/07/23 05:11:29 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
- * Revision 1.37  2020/07/23 04:27:33  dlr
- * Add -s option to allow sorted output in all modes.  Added rli2 suport,
- * with the -2 option, so you can process lists of sorted files.
+ * Revision 1.38  2020/07/23 05:11:29  dlr
+ * Improve rli2 messages and add time info
  *
  * Revision 1.36  2020/07/22 13:49:16  dlr
  * Chavnge from leveldb to Berkeley db for a 3x improvement in performance.
@@ -1403,7 +1402,7 @@ void getnextline(struct Infiles *infile) {
 
 void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
     if (outfile->curpos+len > outfile->size || buf == NULL) {
-	if (fwrite(outfile->Buffer,outfile->curpos,1,outfile->fi) != 1) {
+	if (outfile->curpos && fwrite(outfile->Buffer,outfile->curpos,1,outfile->fi) != 1) {
 	    fprintf(stderr,"Write error. Disk full?\n");
 	    perror(outfile->fn);
 	    exit(1);
@@ -1420,11 +1419,17 @@ void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
 
 
 void rli2(int argc, char **argv) {
+    struct timespec starttime,curtime;
+    double wtime;
     int x, res;
-    int64_t lsize, llen;
+    int64_t lsize, llen, Write, rem;
     char *eol,*linein;
+    uint64_t memsize;
     struct InHeap *heap;
     int heapcnt = argc-2;
+
+     
+    current_utc_time(&starttime);
 
     lsize = MaxMem / argc;
     Infile = calloc(sizeof(struct Infiles),argc);
@@ -1433,9 +1438,11 @@ void rli2(int argc, char **argv) {
 	fprintf(stderr,"Out of memory initializing structures\n");
 	exit(1);
     }
+    memsize = argc*sizeof(struct Infiles) + heapcnt*sizeof(struct InHeap);
     for (x=0; x < argc; x++) {
 	Infile[x].size = lsize;
 	Infile[x].Buffer = calloc(lsize+16,1);
+	memsize += lsize+16;
 	if (!Infile[x].Buffer) {
 	    fprintf(stderr,"Could not allocate %"PRIu64" bytes for I/O buffer\n",(uint64_t)lsize);
 	    exit(1);
@@ -1480,33 +1487,68 @@ void rli2(int argc, char **argv) {
     
     
     qsort(heap,heapcnt,sizeof(struct InHeap),heapcmp);
+
+    for (x=0 ; x < 4; x++) {
+       if (memsize < Memscale[x].size) break;
+    }
+
+    current_utc_time(&curtime);
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+    fprintf(stderr,"Estimated memory required: %s (%.02f%s)\nAllocated in %.4f seconds\n",
+	 commify(memsize),(double)memsize/Memscale[x].scale,
+	 Memscale[x].name,wtime);
+    fprintf(stderr,"Start processing input \"%s\"\n",Infile[0].fn);
+    current_utc_time(&starttime);
+
+    Write = rem = 0;
     while (Infile[0].curlen && Infile[0].eof == 0) {
 	if (heap[0].In->curlen && heap[0].In->eof == 0) {
 	    res = mystrcmp(Infile[0].curline,heap[0].In->curline);
 	    if (res == 0) {
-		if (DoCommon)
+		if (DoCommon) {
 		    rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
+		    rem++;Write++;
+		} else {
+		    rem++;
+		}
 		getnextline(&Infile[0]);
 		continue;
 	    }
 	    if (res < 0) {
-		if (DoCommon == 0)
+		if (DoCommon == 0) {
 		    rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
+		    Write++;
+		}
 		getnextline(&Infile[0]);
 		continue;
 	    }
 	    if (res > 0) {
 		getnextline(heap[0].In);
+		if (heap[0].In->eof) {
+		    current_utc_time(&curtime);
+		    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+		    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+		    fprintf(stderr,
+			    "%s file \"%s\" complete. %"PRIu64" lines, %.4f seconds elapsed\n",(DoCommon)?"Common":"Remove",heap[0].In->fn,heap[0].In->line,wtime);
+		}
 		reheap(heap,heapcnt);
 	    }
 	} else {
-	    if (DoCommon == 0)
+	    if (DoCommon == 0) {
 		rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
+		Write++;
+	    }
 	    getnextline(&Infile[0]);
 	    continue;
 	}
     }
     rliwrite(&Infile[1],NULL,0);
+    current_utc_time(&curtime);
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+    fprintf(stderr,"Input file \"%s\" complete. %"PRIu64" lines read. %.4f seconds elapsed\n",Infile[0].fn,Infile[0].line,wtime);
+    fprintf(stderr,"%s total lines written, %"PRIu64" lines %s\n",commify(Write),rem,(DoCommon)?"in common":"removed");
     for (x=0; x < argc; x++) {
 	fclose(Infile[x].fi);
     }
