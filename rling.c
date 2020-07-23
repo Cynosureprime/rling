@@ -1352,7 +1352,7 @@ int heapcmp(const void *a, const void *b) {
 }
 
 /*
- * A classic, but still effective. 
+ * A classic, but still effective.
  * reheap takes an array arranged as a heap, and ensures that the lowest
  * value is always at position 0 in the array.  This permits high
  * performance for the rli2 function, regardless of how many files contain the
@@ -1384,13 +1384,13 @@ void reheap(struct InHeap *InH, int cnt)
  *    the top of the buffer, adjusting counts, and reading the
  *    opened file to fill the buffer.
  * 3. Removing any '\r' immediately proceeding the '\n', and adjusting
- *    the line length.  Note that the length it returns includes the 
+ *    the line length.  Note that the length it returns includes the
  *    '\n', so the minimum line length is 1, not 0.  A 0 line
  *    length means that there is no more data, and should also have
  *    the eof flag set.  This is redundant (setting the flag and returning
  *    0 length line), and you should probably just drop the eof flag.
  * 4. If Dedupe is set, this also skips (and counts) duplicate lines.
- * 5. This also checks file order.  If lines are not in lexically sorted 
+ * 5. This also checks file order.  If lines are not in lexically sorted
  *    order, then the program will abend, and display the out-of-order
  *    lines and line numbers.
  * 6. If a line appears which is > half the buffer size (more or less),
@@ -1457,7 +1457,7 @@ void getnextline(struct Infiles *infile) {
 		fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
 		exit(1);
 	    }
-	    if (res ==0) 
+	    if (res ==0)
 		infile->dup++;
 	    else
 		infile->unique++;
@@ -1520,7 +1520,7 @@ void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
  *  adjusted.  This automatically merge-sorts the list of remove files.
  *
  *  If the top of the heap is bigger than the current input line, then the
- *  current line is either written to the output, or discarded, depending 
+ *  current line is either written to the output, or discarded, depending
  *  on the -c flag.  This quickly spins through the input until we get
  *  to the next matching "remove" line.
  *
@@ -1542,7 +1542,7 @@ void rli2(int argc, char **argv) {
     struct InHeap *heap;
     int heapcnt = argc-2;
 
-     
+
     current_utc_time(&starttime);
 
     lsize = MaxMem / argc;
@@ -1868,7 +1868,7 @@ errexit:
     sprintf(DBOUT,"%s/%s%d.db",TempPath,"rlingo",getpid());
 
     if (ProcMode == 2 && (Dedupe == 0 )) {
-	if (Dedupe = 0) fprintf(stderr,"The -n switch cannot be used with -f\n");
+	if (Dedupe == 0) fprintf(stderr,"The -n switch cannot be used with -f\n");
 	fprintf(stderr,"Unfortunately, when using file mode, deduplication is required\n");
 	exit(1);
     }
