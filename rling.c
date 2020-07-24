@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <inttypes.h>
 #include <string.h>
 #ifndef _AIX
@@ -106,9 +107,15 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.42 2020/07/23 13:28:24 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.44 2020/07/24 07:34:14 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.44  2020/07/24 07:34:14  dlr
+ * Added -q for detailed output analysis
+ *
+ * Revision 1.43  2020/07/23 14:28:31  dlr
+ * Minor changes, and bug fix for -n with -f mode
+ *
  * Revision 1.42  2020/07/23 13:28:24  dlr
  * Fixed typo on stdin for rli2.  Added additional error checks for the line
  * length.  Line lengths are not limited, but there must be room in the cache
@@ -282,6 +289,13 @@ struct DBSort {
     char *key;
 };
 
+struct Freq {
+    uint32_t count,len;
+    char *key;
+} *Freq;
+uint64_t *Histogram;
+uint64_t FreqSize;
+
 struct Infiles {
     FILE *fi;
     char *fn;
@@ -317,6 +331,7 @@ struct JOB {
 #define JOB_WRITE 6
 #define JOB_BUILDDB 7
 #define JOB_FINDDB 8
+#define JOB_FANAL 9
 #define JOB_DONE 99
 
 struct JOB *FreeHead, **FreeTail;
@@ -328,7 +343,7 @@ lock *Currem_lock, *ReadBuf0, *ReadBuf1;
 lock *Common_lock;
 
 uint64_t Currem_global,Unique_global,Write_global, Occ_global;
-uint64_t Maxdepth_global;
+uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
 int Maxt, Workthread;
 int _dowildcard = -1; /* enable wildcard expansion for Windows */
@@ -634,6 +649,10 @@ int comp3(const void *a, const void *b) {
     return(0);
 }
 
+/*
+ * comp4 is used for the database compare when using the line
+ * number to get back to original order
+ */
 int comp4(DB *v, const DBT *a, const DBT *b) {
     uint64_t a1,b1;
     if (a->size != 8 || b->size != 8) return 0;
@@ -642,6 +661,27 @@ int comp4(DB *v, const DBT *a, const DBT *b) {
     if (a1 < b1) return(-1);
     if (a1 > b1) return(1);
     return (0);
+}
+
+/*
+ * comp5 is used for the frequency analysis. The sort here
+ * does double duty, in that there can be "gaps" in the frequency
+ * table structure, because it is processed with many threads.
+ * If all words in the list are unique, there will be no gaps
+ * If there are, comp5 helps to sort them to the end of the list
+ * by looking for null pointers
+ */
+int comp5(const void *a, const void *b) {
+    struct Freq *a1 = (struct Freq *)a;
+    struct Freq *b1 = (struct Freq *)b;
+    if (!a1->key || !b1->key) {
+	if (!a1->key) return(1);
+	if (!b1->key) return(-1);
+	return(0);
+    }
+    if (a1->count < b1->count) return(1);
+    if (a1->count > b1->count) return(-1);
+    return(mystrcmp(a1->key,b1->key));
 }
 
 
@@ -711,7 +751,7 @@ MDXALIGN void procjob(void *dummy) {
     struct Linelist *cur, *next, *last;
     char **sorted, *key, *newline, *eol;
     uint64_t x, unique, occ, rem,thisnum, crc, index, j, RC, COM, thisend;
-    int64_t llen, maxdepth;
+    int64_t llen, maxdepth, minlen, maxlen;
     int res, curline, numline, ch, delflag;
     DBT dbkey, dbdata;
     size_t DBlen;
@@ -740,6 +780,8 @@ MDXALIGN void procjob(void *dummy) {
 		j = wu->count = 0;
 		index = job->start;
 		wu->start = index;
+		minlen = (uint32_t) -1L;
+		maxlen = 0;
 		do {
 		    newline = &Fileinmem[index];
 		    wu->Sortlist[j++] = newline;
@@ -748,7 +790,10 @@ MDXALIGN void procjob(void *dummy) {
 		       eol = &Fileinmem[job->end];
 		    if (eol > newline && eol[-1] == '\r')
 		        eol[-1] = '\n';
-		    index += (eol-newline) + 1;
+		    llen = eol - newline;
+		    index += llen + 1;
+		    if (llen > maxlen) maxlen = llen;
+		    if (llen < minlen) minlen = llen;
 		    if (index >= job->end || j >= wu->ssize) {
 		        wu->count = j;
 		        wu->end = index;
@@ -784,6 +829,10 @@ MDXALIGN void procjob(void *dummy) {
 			j = wu->count = 0;
 		    }
 		} while (index < job->end);
+		while (maxlen > Maxlen_global)
+		    __sync_val_compare_and_swap(&Maxlen_global,Maxlen_global,maxlen);
+		while (minlen < Minlen_global)
+		    __sync_val_compare_and_swap(&Minlen_global,Minlen_global,minlen);
 		break;
 
 	    case JOB_DEDUPE:
@@ -1151,6 +1200,35 @@ MDXALIGN void procjob(void *dummy) {
 		    twist(ReadBuf1,BY, -1);
 		}
 		break;
+
+	    case JOB_FANAL:
+		key = Sortlist[job->start];
+		unique = 1; rem = 0;
+		thisnum = job->start;
+		j = 1;
+		for (index=job->start+1; index < job->end; index++) {
+		    if (mystrcmp(key,Sortlist[index]) == 0) {
+			j++;
+			rem++;
+			MarkDeleted(index);
+		    } else {
+			unique++;
+			Freq[thisnum].key = key;
+			Freq[thisnum].count = j;
+			eol = findeol(key,Fileend - key);
+			if (!eol)
+			    eol = Fileend;
+			llen = eol - key;
+			Freq[thisnum++].len = llen;
+			if (Histogram) __sync_fetch_and_add(&Histogram[llen],1);
+			key = Sortlist[index];
+			j = 1;
+		    }
+		}
+		__sync_add_and_fetch(&Currem_global,rem);
+		__sync_add_and_fetch(&Unique_global,unique);
+		break;
+
 
 	    default:
 	        fprintf(stderr,"Unknown job function: %d\n",job->func);
@@ -1675,10 +1753,132 @@ void rli2(int argc, char **argv) {
 
 }
 
+int histcomp(const void *a, const void *b) {
+    struct lhist {
+	uint64_t len,count;
+    } *a1, *b1;
+    a1 = (struct lhist *)a;
+    b1 = (struct lhist *)b;
+    if (a1->count < b1->count) return (1);
+    if (a1->count > b1->count) return(-1);
+    if (a1->len < b1->len) return (1);
+    if (a1->len > b1->len) return (-1);
+    return (0);
+}
+void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
+{
+    char *t,c, *lopts, *l;
+    int ccol, lcol, wcol, dohist = 0, anyvalid = 0;
+    uint64_t x, y;
+    struct lhist {
+	uint64_t len, count;
+    } *lhist = NULL;
 
+    lopts = strdup(qopts);
+    if (!lopts) {
+	fprintf(stderr,"Fatal memory allocation error\n");
+	exit(1);
+    }
+    l = lopts;
 
+    ccol = 8; lcol = 8; wcol = 8;
+    for (t=qopts; (c = *t); t++) {
+	switch(c) {
+	    case 'h':
+		dohist = 1;
+		break;
+	    case 'a':
+		fprintf(fo,"%*s %*s %s",ccol,"Count",lcol,"Length","Line");
+		dohist = 1;
+		anyvalid = 1;
+		*l++ = c;
+		break;
+	    case 'c':
+		if (t[1] == '-' || isdigit(t[1]))
+		    ccol = atoi(&t[1]);
+		fprintf(fo,"%*s ",ccol,"Count");
+		anyvalid = 1;
+		*l++ = c;
+		break;
+	    case 'l':
+		if (t[1] == '-' || isdigit(t[1]))
+		    lcol = atoi(&t[1]);
+		fprintf(fo,"%*s",lcol,"Length");
+		anyvalid = 1;
+		*l++ = c;
+		break;
+	    case 'w':
+		if (t[1] == '-' || isdigit(t[1]))
+		    wcol = atoi(&t[1]);
+		fprintf(fo,"%s","Line");
+		anyvalid = 1;
+		*l++ = c;
+		break;
+	    default:
+		break;
+	}
+    }
+    if (anyvalid) {fputc('\n',fo);Write_global++;}
+    *l = 0;
+    for (x=0; anyvalid && x < Line; x++) {
+	if (Freq[x].key == NULL) break;
+	for (l=lopts; (c = *l); l++) {
+	    switch(c) {
+		case 'a':
+		    fprintf(fo,"%*u %*u ",ccol,Freq[x].count,lcol,Freq[x].len);
+		    fwrite(Freq[x].key,Freq[x].len,1,fo);
+		    break;
+		case 'c':
+		    fprintf(fo,"%*u ",ccol,Freq[x].count);
+		    break;
+		case 'l':
+		    fprintf(fo,"%*u ",lcol,Freq[x].len);
+		    break;
+		case 'w':
+		    fwrite(Freq[x].key,Freq[x].len,1,fo);
+		    break;
+	    }
+	}
+	if (anyvalid) {fputc('\n',fo);Write_global++; }
+	if (ferror(fo)) {
+	    fprintf(stderr,"Write error on \"%s\". Disk full?\n",fn);
+	    perror(fn);
+	    exit(1);
+	}
+    }
 
-
+    if (dohist && Histogram) {
+	if (anyvalid) {
+	    fputc('\n',fo); fputc('\n',fo); fputc('\n',fo); fputc('\n',fo);
+	    Write_global += 4;
+	}
+	for (x=0, y = 0; x <= Maxlen_global; x++) 
+	    if (Histogram[x]) y++;
+	lhist = calloc(y+4,sizeof(struct lhist));
+	if (!lhist) {
+	    fprintf(stderr,"Histogram memory allocation failed for %"PRIu64" entries\n",y);
+	    exit(1);
+	}
+	for (y=x=0; x <=Maxlen_global; x++) {
+	    if (Histogram[x]) {
+		lhist[y].count = Histogram[x];
+		lhist[y++].len = x;
+	    }
+	}
+	qsort(lhist,y,sizeof(struct lhist),histcomp);
+	fprintf(fo,"\t\tHistogram of lengths\n");
+	fprintf(fo,"Count     Length\n");
+	Write_global += 2;
+	for (x=0; x<y; x++)
+	    fprintf(fo,"%-9"PRIu64" %-9"PRIu64"\n",lhist[x].count,lhist[x].len);
+	Write_global += x;
+	if (ferror(fo)) {
+	    fprintf(stderr,"Write error on \"%s\". Disk full?\n",fn);
+	    perror(fn);
+	    exit(1);
+	}
+    }
+}
 
 
 
@@ -1712,12 +1912,14 @@ int main(int argc, char **argv) {
     DBT dbkey, dbdata;
     DBC *dbcur;
     char DBNAME[MDXMAXPATHLEN*2],DBOUT[MDXMAXPATHLEN*2];
+    char *qopts;
 #ifndef _AIX
     struct option longopt[] = {
 	{NULL,0,NULL,0}
     };
 #endif
 
+    qopts = NULL;
     MaxMem = MAXCHUNK;
     strcpy(TempPath,".");
     ErrCheck = 1;
@@ -1732,9 +1934,9 @@ int main(int argc, char **argv) {
     Maxt = get_nprocs();
     current_utc_time(&starttime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?2hbsficdnvt:p:T:M:")) != -1) {
+    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:T:M:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?2hbsficdnvt:p:T:M:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:T:M:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -1758,6 +1960,8 @@ errexit:
 		fprintf(stderr,"\t-2\t\tUse rli2 mode - all files must be sorted. Low mem usage.\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
 		fprintf(stderr,"\t-T path\t\tDirectory to store temp files in\n");
+		fprintf(stderr,"\t-q [cahwl]\tDo frequency analysis on input\n\t\t\ta - all output, c - count, l - length, w - word,\n\t\t\th - append histogram\n");
+		fprintf(stderr,"\t\t\tAdditional files will be matched against input files\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
 		fprintf(stderr,"\n\tstdin and stdout can be used in the place of any filename\n");
 		exit(1);
@@ -1777,6 +1981,20 @@ errexit:
 
 	    case '2':
 		ProcMode = 3;
+		break;
+
+	    case 'q':
+		ProcMode = 4;
+		qopts = strdup(optarg);
+		y = 0;
+		for (x=0; x <strlen(qopts); x++) {
+		    if (strchr("cahwl",qopts[x]))
+			y = 1;
+		}
+		if (y == 0) {
+		    fprintf(stderr,"No valid -q options.  Please use \"-q a\" for all options, or select one or\nmore of cahwl\n");
+		    exit(1);
+		}
 		break;
 
 	    case 'c':
@@ -1891,6 +2109,8 @@ errexit:
 	exit(0);
     }
 
+    Minlen_global = (uint64_t)-1L;
+    Maxlen_global = 0;
     Readbuf = malloc(MAXCHUNK+16);
     Readindex = malloc(MAXLINEPERCHUNK*2*sizeof(struct LineInfo)+16);
     Jobs = calloc(Maxt,sizeof(struct JOB));
@@ -1952,7 +2172,7 @@ errexit:
     if (WorkUnitLine > filesize)
 	WorkUnitLine = filesize;
 
-    if (ProcMode < 2) {
+    if (ProcMode < 2 || ProcMode == 4) {
 	Fileinmem = malloc(MAXCHUNK + 16);
 	for (filesize = 0; !feof(fi); ) {
 	    readsize = fread(&Fileinmem[filesize],1,MAXCHUNK,fi);
@@ -2101,6 +2321,9 @@ errexit:
 		  filesize +
 		  Line * sizeof(char **);
 
+	if (ProcMode == 4) 
+	    memsize += Line * sizeof(struct Freq);
+		
 	if (ProcMode == 0) {
 	    HashSize = HashMask = 0;
 	    HashPrime = 513;
@@ -2270,6 +2493,7 @@ errexit:
 	   break;
 
     	case 1:
+	case 4:
 	    fprintf(stderr,"Sorting...");fflush(stderr);
 	    WorkUnitLine = Line / Maxt;
 	    if (WorkUnitLine < LINELIMIT)
@@ -2281,11 +2505,28 @@ errexit:
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	    fprintf(stderr," took %.4f seconds\n",wtime);
 	    current_utc_time(&starttime);
+	    if (ProcMode == 4) {
+		Freq = calloc(Line,sizeof(struct Freq));
+		if (!Freq) {
+		    fprintf(stderr,"Could not allocate memory for frequency table\n");
+		    fprintf(stderr,"Make more memory available, or reduce the list size\n");
+		    exit(1);
+		}
+		FreqSize = 0;
+	    }
 	    thisline = Sortlist[0];
 	    Unique_global = Line;
 	    Currem = 0;
-	    if (Dedupe) {
-		fprintf(stderr,"De-duplicating:     ");fflush(stderr);
+	    if (Dedupe || ProcMode == 4) {
+		Histogram = NULL;
+		if (Maxlen_global < 1000000) {
+		    Histogram = calloc(Maxlen_global+4,sizeof(uint64_t));
+		    if (!Histogram) {
+			fprintf(stderr,"Not enough memory for Histogram - disabling feature\n");
+		    }
+		}
+
+		fprintf(stderr,"%s",(ProcMode == 4) ? "Analyzing:     ":"De-duplicating:     ");fflush(stderr);
 		Unique_global = Currem_global = 0;
 		work = 0;
 		while (work < Line) {
@@ -2296,7 +2537,10 @@ errexit:
 		    if (FreeHead == NULL) FreeTail = &FreeHead;
 		    twist(FreeWaiting, BY, -1);
 		    job->next = NULL;
-		    job->func = JOB_DEDUPE;
+		    if (ProcMode == 4)
+			job->func = JOB_FANAL;
+		    else 
+			job->func = JOB_DEDUPE;
 		    job->start = work;
 		    curpos = work + WorkUnitLine;
 		    if (curpos > Line) curpos = Line;
@@ -2316,6 +2560,11 @@ errexit:
 		possess(FreeWaiting);
 		wait_for(FreeWaiting,TO_BE,Maxt);
 		release(FreeWaiting);
+		if (ProcMode == 4) {
+		    fprintf(stderr,"\rFrequency:      ");fflush(stderr);
+		    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
+		    qsort(Freq,Line,sizeof(struct Freq),comp5);
+		}
 	    }
 
 	    current_utc_time(&curtime);
@@ -2326,7 +2575,9 @@ errexit:
 	    break;
 
 	case 2:
+	case 3:
 	    break;
+
 	default:
 	    fprintf(stderr,"Unknown ProcMode=%d\n",ProcMode);
 	    exit(1);
@@ -2335,7 +2586,11 @@ errexit:
     Totrem = 0;
     for (x=2; x < argc; x++) {
 	Currem_global = 0;
-	fprintf(stderr,"%s from \"%s\"... ",(DoCommon)?"Checking common":"Removing",argv[x]);fflush(stderr);
+	if (ProcMode == 4) 
+	    fprintf(stderr,"Comparing from \"%s\"... ",argv[x]);
+	else
+	    fprintf(stderr,"%s from \"%s\"... ",(DoCommon)?"Checking common":"Removing",argv[x]);
+	fflush(stderr);
 	stat(argv[x],&sb1);
 	if (sb1.st_mode & S_IFDIR) {
 	    fprintf(stderr,"skipping directory\n");
@@ -2369,6 +2624,7 @@ errexit:
 			job->func = JOB_FINDHASH;
 			break;
 		    case 1:
+		    case 4:
 			job->func = JOB_SEARCH;
 			break;
 		    case 2:
@@ -2415,7 +2671,10 @@ errexit:
 	wait_for(FreeWaiting, TO_BE, Maxt);
 	release(FreeWaiting);
 	possess(Currem_lock);
-	fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
+	if (ProcMode == 4)
+	    fprintf(stderr,"%"PRIu64" matched\n",(uint64_t)Currem_global);
+	else 
+	    fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
 	Totrem += Currem_global;
 	release(Currem_lock);
 	fclose(fi);
@@ -2424,7 +2683,10 @@ errexit:
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-    fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
+    if (ProcMode == 4) 
+	fprintf(stderr,"\n%s total line%s matched in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",wtime);
+    else 
+	fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
     current_utc_time(&starttime);
     if (ProcMode == 0 && SortOut) {
 	fprintf(stderr,"Final sort ");fflush(stdout);
@@ -2574,42 +2836,48 @@ errexit:
 	}
 
     } else {
-        fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	work = Line / Maxt;
-	if (work < Maxt) work = Line;
-	curline = 1;
-	possess(Common_lock);
-	Write_global = 0;
-	twist(Common_lock,TO,curline);
-	for (curpos=0; curpos < Line; curpos += work) {
-	    possess(FreeWaiting);
-	    wait_for(FreeWaiting, NOT_TO_BE,0);
-	    job = FreeHead;
-	    FreeHead = job->next;
-	    if (FreeHead == NULL) FreeTail = &FreeHead;
-	    twist(FreeWaiting, BY, -1);
-	    job->next = NULL;
-	    job->func = JOB_WRITE;
-	    job->fo = fo;
-	    job->fn = argv[1];
-	    job->startline = curline++;
-	    job->start = curpos;
-	    job->end = curpos + work;
-	    if (job->end > Line) job->end = Line;
-	    if (Workthread < Maxt) {
-		launch(procjob,NULL);
-		Workthread++;
+	if (ProcMode == 4) {
+	    fprintf(stderr,"Input file had %s lines, with lengths from %"PRIu64" to %"PRIu64"\n",commify(Line),Minlen_global,Maxlen_global);
+	    fprintf(stderr,"Writing analysis to \"%s\"\n",argv[1]);
+	    writeanal(fo,argv[1],qopts,Line);
+	} else {
+	    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
+	    work = Line / Maxt;
+	    if (work < Maxt) work = Line;
+	    curline = 1;
+	    possess(Common_lock);
+	    Write_global = 0;
+	    twist(Common_lock,TO,curline);
+	    for (curpos=0; curpos < Line; curpos += work) {
+		possess(FreeWaiting);
+		wait_for(FreeWaiting, NOT_TO_BE,0);
+		job = FreeHead;
+		FreeHead = job->next;
+		if (FreeHead == NULL) FreeTail = &FreeHead;
+		twist(FreeWaiting, BY, -1);
+		job->next = NULL;
+		job->func = JOB_WRITE;
+		job->fo = fo;
+		job->fn = argv[1];
+		job->startline = curline++;
+		job->start = curpos;
+		job->end = curpos + work;
+		if (job->end > Line) job->end = Line;
+		if (Workthread < Maxt) {
+		    launch(procjob,NULL);
+		    Workthread++;
+		}
+		possess(WorkWaiting);
+		*WorkTail = job;
+		WorkTail = &(job->next);
+		twist(WorkWaiting,BY,+1);
 	    }
-	    possess(WorkWaiting);
-	    *WorkTail = job;
-	    WorkTail = &(job->next);
-	    twist(WorkWaiting,BY,+1);
+	    possess(FreeWaiting);
+	    wait_for(FreeWaiting,TO_BE,Maxt);
+	    release(FreeWaiting);
+	    possess(Common_lock);
+	    release(Common_lock);
 	}
-	possess(FreeWaiting);
-	wait_for(FreeWaiting,TO_BE,Maxt);
-	release(FreeWaiting);
-	possess(Common_lock);
-	release(Common_lock);
     }
     fclose(fo);
     current_utc_time(&curtime);
