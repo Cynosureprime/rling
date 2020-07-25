@@ -16,26 +16,20 @@
 #endif
 
 /*
- * rehex is a tool used to change encoding of a line.  If a line
- * has characters that can't be easily viewed as plain text (like embedded
- * NUL characters, or high-bit set) it will wrap the result in $HEX[]
- * to make it more useful.
- *
- * you can "unhex" the input with the -u flag, but no one should do that.
- * Ever. :-)
+ * getpass looks through a set of files (optionally) skipping those that 
+ * look like they are not valid result, looking for deliminator-separated
+ * words. The default mode will probably work for most people, but you
+ * can override it if you have unusual result files, or want to extract
+ * certain fields or columns, and the like.
+ * As with the rest of the utilities, getpass strives to have unlimited line
+ * lengths, and auto-sizes the buffers to accomplish this.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.3 2020/07/25 01:17:14 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.1 2020/07/25 01:17:14 dlr Exp dlr $";
 
 /*
- * $Log: rehex.c,v $
- * Revision 1.3  2020/07/25 01:17:14  dlr
- * Minor updates for llen
- *
- * Revision 1.2  2020/07/24 22:18:15  dlr
- * Improve version handling
- *
- * Revision 1.1  2020/07/24 22:15:33  dlr
+ * $Log: getpass.c,v $
+ * Revision 1.1  2020/07/25 01:17:14  dlr
  * Initial revision
  *
  */
@@ -47,14 +41,15 @@ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.3 2020/07/
 
 char *Cache;
 uint64_t Cachesize;
-int Unhex;
+int Unhex,Fieldnum,Colstart,Colend;
+int Delim;
 
 /*
  * findeol(pointer, length)
  *
  * findeol searches for the next eol character (\n, 0x0a) in a string
  *
- * The Intel version uses SSE to process 64 bits at a time.  This only
+ * The Intel version uses SSE to process 128 bits at a time.  This only
  * is able to work because I ensure that the Fileinmem buffer has adequate
  * space (16 bytes) following it to ensure that reading past the end won't
  * read memory not available and cause a fault.
@@ -151,11 +146,14 @@ int get32(char *iline, char *dest) {
 
 
 void process(FILE *fi, char *fn) {
-    char *in, *eol, *end;
+    char *in, *eol, *end, *t;
+    char *st, *en, delim;
     size_t readsize;
     int64_t cur,size, len, offset;
     int64_t x, needshex, hexlen, llen;
-    int Ateof;
+    int Ateof, field;
+
+    delim = (char)Delim;
 
     if (!Cache || Cachesize == 0) {
 	Cache = malloc(CACHESIZE + 16);
@@ -209,8 +207,40 @@ again:
 	    goto again;
 	}
 	if (!eol && Ateof) eol = end;
-	llen = len = eol - in;
+	len = eol - in;
+	llen = len;
 	if (eol > in && eol[-1] == '\r') llen--;
+	if (Fieldnum) {
+	    st = in; en = in;
+	    for (field = 0; en < eol;en++) {
+	        if (*en == delim) {
+		    field++;
+		    if (Fieldnum == field) break;
+		    st = en + 1;
+		}
+	    }
+	    if (en >= eol) field++;
+	    if (Fieldnum != field) goto nextline;
+	    in = st;
+	    if (in > en) goto nextline;
+	    llen = en - in;
+	} else if (Colstart || Colend) {
+	    if (llen < Colstart) goto nextline;
+	    in += Colstart-1; llen -= Colstart-1;
+	    if (Colend && Colstart <Colend) 
+	        llen = (Colend-Colstart);
+	    if (llen > (len-Colstart)) goto nextline;
+	} else {
+	    for (x=llen-1; x > 0; x--) 
+	        if (in[x] == delim) break;
+	    if (x>0 && in[x] == ':') {
+	        llen -= x +1;
+		in = &in[x+1];
+		if (llen <0) goto nextline;
+	    } else
+	        goto nextline;
+	}
+
 	if (Unhex) {
 	    if (strncmp(in,"$HEX[",5) == 0) {
 		in[llen] = 0;
@@ -227,6 +257,7 @@ again:
 	    for (needshex = x = 0; !needshex && x <llen; x++) {
 		needshex = in[x] <= ' '  || in[x] > 126;
 	    }
+
 	    if (needshex) {
 	        printf("$HEX[");
 		for (x=0; x < llen; x++)
@@ -241,38 +272,115 @@ again:
 		fputc('\n',stdout);
 	    }
 	}
+nextline:
 	cur += len + 1;
 	in = &Cache[cur];
     }
 }
 
 
+char *Skipfiles[] = {
+    ".txt",".orig",".test",".csalt.txt",".fixme",".new",NULL
+};
+
+
 int main(int argc,char **argv) {
-    int ch,x;
+    int ch,x,ex,exsize,fsize;
     FILE *fi;
-    char *v;
+    char *v,buffer[CACHESIZE+16];
+    char **Exclude;
+    int Excludesize;
 #ifndef _AIX
     struct option longopt[] = {
 	{NULL,0,NULL,0}
     };
 #endif
-
+    Exclude = Skipfiles;
     Cache = NULL;
     Cachesize = 0;
     Unhex = 0;
+    Delim = ':';
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "u")) != -1) {
+    while ((ch = getopt(argc, argv, "unx:d:c:f:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "u",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "unx:d:c:f:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
+	    case 'n':
+	        Exclude = NULL;
+		break;
+	    case 'd':
+	        if (strlen(optarg) >1) {
+		    if (strncmp(optarg,"0x",2) == 0)
+		        sscanf(optarg,"0x%x",&Delim);
+		    else
+		        Delim = atoi(optarg);
+		    if (Delim <0 || Delim > 255) {
+		        fprintf(stderr,"Invalid delimiter %s\n",optarg);
+			exit(1);
+		    }
+		} else 
+		    Delim = *optarg;
+		break;
+
+	    case 'c':
+	        v = optarg;
+		Colstart = 0; Colend = 0;
+		if (isdigit(*v)) {
+		    Colstart = atoi(v);
+		    while (isdigit(*++v));
+		}
+		if (*v == '-') v++;
+		if (isdigit(*v))
+		   Colend = atoi(v);
+		break;
+
+	    case 'f':
+	        Fieldnum = atoi(optarg);
+		break;
 	    case 'u':
 	        Unhex = 1;
 		break;
+	    case 'x':
+	        fi = fopen(optarg,"r");
+		if (!fi) {
+		    fprintf(stderr,"Can't open exclude file %s\n",optarg);
+		    perror(optarg);
+		    exit(1);
+		}
+		Excludesize = (CACHESIZE/sizeof(char **));
+		Exclude = calloc(Excludesize+4,sizeof(char **));
+		if (!Exclude) {
+		    fprintf(stderr,"Out of memory allocating for exclude file\n");
+		    exit(1);
+		}
+		x = 0;
+		while (fgets(buffer,CACHESIZE,fi)) {
+		    Exclude[x] = strdup(buffer);
+		    if (!Exclude[x]) {
+		        fprintf(stderr,"Out of memory allocating for exclude line %d\n",x);
+		        exit(1);
+		    }
+		    if (++x >= Excludesize) {
+		        Exclude = realloc(Exclude,(Excludesize*2) + 4);
+			if (!Exclude) {
+			    fprintf(stderr,"Out of memory allocating extra space for Exclude line %d\n",x);
+			    exit(1);
+			}
+		    }
+		}
+		fclose(fi);
+		break;
+
 	    default:
 		v = Version;while (*v++ != ' ');while (*v++ !=' ');
-	        fprintf(stderr,"rehex Version %s\n\nrehex [-u] [file file...]\nIf no files supplied, reads from stdin.  Always writes to stdout\nIf stdin is used as a filename, the actual stdin will read\n",v);
+	        fprintf(stderr,"getpass Version %s\n\n",v);
+		fprintf(stderr,"extract passwords from result files\n");
+		fprintf(stderr,"\t-d [val]\t\tSet Delimter to character, decimal value, or 0x-style hex value\n");
+		fprintf(stderr,"\t-c [colspec]\tSet extraction to N-,N-M, or -M like cut\n");
+		fprintf(stderr,"\t-f [field]\tSet extraction to field number. Starts at 1\n");
+		fprintf(stderr,"\t-x file\t\tRead exclude extension list from file, replacing default\n");
 		exit(1);
 	}
     }
@@ -281,7 +389,20 @@ int main(int argc,char **argv) {
 
     if (argc == 0)
         process(stdin,"stdin");
-    for (x=0; x<argc; x++) {
+for (x=0; x<argc; x++) {
+        if (Exclude) {
+	    for (ex=0; Exclude[ex]; ex++) {
+	        exsize = strlen(Exclude[ex]);
+		fsize = strlen(argv[x]);
+		if (exsize < strlen(argv[x])) {
+		    if (strcmp(&argv[x][fsize-exsize],Exclude[ex]) == 0) {
+		        fprintf(stderr,"Skipping \"%s\" because of exclude %s\n",argv[x],Exclude[ex]);
+			goto skip;
+		    }
+		}
+	    }
+	}
+	
 	if (strcmp(argv[x],"stdin") == 0) 
 	    fi = stdin;
 	else
@@ -292,6 +413,7 @@ int main(int argc,char **argv) {
 	}
 	process(fi,argv[x]);
 	fclose(fi);
+skip:   ex = 0;
     }
     return(0);
 }
