@@ -23,11 +23,11 @@ rling: rling.o yarn.o qsort_mt.o
 	cc  $(COPTS) -pthread -o rling rling.o yarn.o qsort_mt.o -ldb
 
 getpass: getpass.c
-	cc  $(COPTS) -o getpass getpass.c
+	cc -fomit-frame-pointer -O3  $(COPTS) -o getpass getpass.c
 
 rehex: rehex.c
-	cc  $(COPTS) -o rehex rehex.c
+	cc -fomit-frame-pointer -O3  $(COPTS) -o rehex rehex.c
 
 clean:
-	rm rling getpass rehex
-	rm *.o
+	rm -f rling getpass rehex
+	rm -f qsort_mt.o rling.o yarn.o
