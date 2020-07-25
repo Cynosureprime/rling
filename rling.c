@@ -107,9 +107,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.44 2020/07/24 07:34:14 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.45 2020/07/25 18:26:37 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.45  2020/07/25 18:26:37  dlr
+ * Improved speed by using qsort_mt for Frequency analysis.  Add better
+ * histogram reporting to -q h and -q a options.
+ *
  * Revision 1.44  2020/07/24 07:34:14  dlr
  * Added -q for detailed output analysis
  *
@@ -1761,15 +1765,16 @@ int histcomp(const void *a, const void *b) {
     b1 = (struct lhist *)b;
     if (a1->count < b1->count) return (1);
     if (a1->count > b1->count) return(-1);
-    if (a1->len < b1->len) return (1);
-    if (a1->len > b1->len) return (-1);
+    if (a1->len < b1->len) return (-1);
+    if (a1->len > b1->len) return (1);
     return (0);
 }
 void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 {
     char *t,c, *lopts, *l;
     int ccol, lcol, wcol, dohist = 0, anyvalid = 0;
-    uint64_t x, y;
+    uint64_t x, y, totcount, totcumu;
+    double curperc, cumuperc;
     struct lhist {
 	uint64_t len, count;
     } *lhist = NULL;
@@ -1859,18 +1864,28 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	    fprintf(stderr,"Histogram memory allocation failed for %"PRIu64" entries\n",y);
 	    exit(1);
 	}
+	totcount = 0;
 	for (y=x=0; x <=Maxlen_global; x++) {
 	    if (Histogram[x]) {
 		lhist[y].count = Histogram[x];
+		totcount += Histogram[x];
 		lhist[y++].len = x;
 	    }
 	}
 	qsort(lhist,y,sizeof(struct lhist),histcomp);
 	fprintf(fo,"\t\tHistogram of lengths\n");
-	fprintf(fo,"Count     Length\n");
+	fprintf(fo,"Count     Length    Percent Cumulative\n");
 	Write_global += 2;
-	for (x=0; x<y; x++)
-	    fprintf(fo,"%-9"PRIu64" %-9"PRIu64"\n",lhist[x].count,lhist[x].len);
+	totcumu = 0;
+        curperc = cumuperc = 0.0;
+	for (x=0; x<y; x++) {
+	    if (totcount) {
+		totcumu += lhist[x].count;
+		curperc = ((double)lhist[x].count * 100.0)/(double)totcount;
+		cumuperc = ((double)totcumu * 100.0)/(double)totcount;
+	    }
+	    fprintf(fo,"%-9"PRIu64" %6"PRIu64"    %6.2f%%    %6.2f%%\n",lhist[x].count,lhist[x].len,curperc,cumuperc);
+	}
 	Write_global += x;
 	if (ferror(fo)) {
 	    fprintf(stderr,"Write error on \"%s\". Disk full?\n",fn);
@@ -2563,7 +2578,7 @@ errexit:
 		if (ProcMode == 4) {
 		    fprintf(stderr,"\rFrequency:      ");fflush(stderr);
 		    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
-		    qsort(Freq,Line,sizeof(struct Freq),comp5);
+		    qsort_mt(Freq,Line,sizeof(struct Freq),comp5,Maxt,forkelem);
 		}
 	    }
 
