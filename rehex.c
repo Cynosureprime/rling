@@ -215,7 +215,7 @@ again:
 	    if (strncmp(in,"$HEX[",5) == 0) {
 		in[llen] = 0;
 	        hexlen = get32(&in[5],in);
-	    } else 
+	    } else
 	        hexlen = llen;
 	    if(hexlen && fwrite(in,hexlen,1,stdout) != 1) {
 		fprintf(stderr,"Write error.\n");
@@ -282,7 +282,7 @@ int main(int argc,char **argv) {
     if (argc == 0)
         process(stdin,"stdin");
     for (x=0; x<argc; x++) {
-	if (strcmp(argv[x],"stdin") == 0) 
+	if (strcmp(argv[x],"stdin") == 0)
 	    fi = stdin;
 	else
 	    fi = fopen(argv[x],"rb");
@@ -296,7 +296,6 @@ int main(int argc,char **argv) {
     return(0);
 }
 
-           
 
 
 
@@ -307,5 +306,6 @@ int main(int argc,char **argv) {
 
 
 
-        
-    
+
+
+
