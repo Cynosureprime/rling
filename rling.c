@@ -1852,7 +1852,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	    fputc('\n',fo); fputc('\n',fo); fputc('\n',fo); fputc('\n',fo);
 	    Write_global += 4;
 	}
-	for (x=0, y = 0; x <= Maxlen_global; x++) 
+	for (x=0, y = 0; x <= Maxlen_global; x++)
 	    if (Histogram[x]) y++;
 	lhist = calloc(y+4,sizeof(struct lhist));
 	if (!lhist) {
@@ -2321,9 +2321,9 @@ errexit:
 		  filesize +
 		  Line * sizeof(char **);
 
-	if (ProcMode == 4) 
+	if (ProcMode == 4)
 	    memsize += Line * sizeof(struct Freq);
-		
+
 	if (ProcMode == 0) {
 	    HashSize = HashMask = 0;
 	    HashPrime = 513;
@@ -2539,7 +2539,7 @@ errexit:
 		    job->next = NULL;
 		    if (ProcMode == 4)
 			job->func = JOB_FANAL;
-		    else 
+		    else
 			job->func = JOB_DEDUPE;
 		    job->start = work;
 		    curpos = work + WorkUnitLine;
@@ -2586,7 +2586,7 @@ errexit:
     Totrem = 0;
     for (x=2; x < argc; x++) {
 	Currem_global = 0;
-	if (ProcMode == 4) 
+	if (ProcMode == 4)
 	    fprintf(stderr,"Comparing from \"%s\"... ",argv[x]);
 	else
 	    fprintf(stderr,"%s from \"%s\"... ",(DoCommon)?"Checking common":"Removing",argv[x]);
@@ -2673,7 +2673,7 @@ errexit:
 	possess(Currem_lock);
 	if (ProcMode == 4)
 	    fprintf(stderr,"%"PRIu64" matched\n",(uint64_t)Currem_global);
-	else 
+	else
 	    fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
 	Totrem += Currem_global;
 	release(Currem_lock);
@@ -2683,9 +2683,9 @@ errexit:
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-    if (ProcMode == 4) 
+    if (ProcMode == 4)
 	fprintf(stderr,"\n%s total line%s matched in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",wtime);
-    else 
+    else
 	fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
     current_utc_time(&starttime);
     if (ProcMode == 0 && SortOut) {

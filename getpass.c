@@ -16,7 +16,7 @@
 #endif
 
 /*
- * getpass looks through a set of files (optionally) skipping those that 
+ * getpass looks through a set of files (optionally) skipping those that
  * look like they are not valid result, looking for deliminator-separated
  * words. The default mode will probably work for most people, but you
  * can override it if you have unusual result files, or want to extract
@@ -227,11 +227,11 @@ again:
 	} else if (Colstart || Colend) {
 	    if (llen < Colstart) goto nextline;
 	    in += Colstart-1; llen -= Colstart-1;
-	    if (Colend && Colstart <Colend) 
+	    if (Colend && Colstart <Colend)
 	        llen = (Colend-Colstart);
 	    if (llen > (len-Colstart)) goto nextline;
 	} else {
-	    for (x=llen-1; x > 0; x--) 
+	    for (x=llen-1; x > 0; x--)
 	        if (in[x] == delim) break;
 	    if (x>0 && in[x] == ':') {
 	        llen -= x +1;
@@ -245,7 +245,7 @@ again:
 	    if (strncmp(in,"$HEX[",5) == 0) {
 		in[llen] = 0;
 	        hexlen = get32(&in[5],in);
-	    } else 
+	    } else
 	        hexlen = llen;
 	    if(hexlen && fwrite(in,hexlen,1,stdout) != 1) {
 		fprintf(stderr,"Write error.\n");
@@ -320,7 +320,7 @@ int main(int argc,char **argv) {
 		        fprintf(stderr,"Invalid delimiter %s\n",optarg);
 			exit(1);
 		    }
-		} else 
+		} else
 		    Delim = *optarg;
 		break;
 
@@ -402,8 +402,8 @@ for (x=0; x<argc; x++) {
 		}
 	    }
 	}
-	
-	if (strcmp(argv[x],"stdin") == 0) 
+
+	if (strcmp(argv[x],"stdin") == 0)
 	    fi = stdin;
 	else
 	    fi = fopen(argv[x],"rb");
@@ -418,7 +418,6 @@ skip:   ex = 0;
     return(0);
 }
 
-           
 
 
 
@@ -429,5 +428,6 @@ skip:   ex = 0;
 
 
 
-        
-    
+
+
+
