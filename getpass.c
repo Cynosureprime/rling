@@ -479,7 +479,7 @@ int main(int argc,char **argv) {
 		fprintf(stderr,"\t-f [field]\tSet extraction to field number. Starts at 1\n");
 		fprintf(stderr,"\t-n\t\tDisable extension exclusion entirely (equivalent to -x /dev/null)\n");
 		fprintf(stderr,"\t-t\t\tDisable extension expansion (file.txt -> file.txt.[hashtype], etc.)\n");
-		fprintf(stderr,"\t-x file\t\tRead excluded extension list from file, replacing default)\n");
+		fprintf(stderr,"\t-x [file]\tRead excluded extension list from file, replacing default\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
 		fprintf(stderr,"\n");
 		fprintf(stderr,"Default excluded extensions:\n\t");
