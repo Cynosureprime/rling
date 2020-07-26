@@ -474,9 +474,10 @@ int main(int argc,char **argv) {
 	        fprintf(stderr,"getpass Version %s\n\n",v);
 		fprintf(stderr,"extract passwords from result files\n");
 		fprintf(stderr,"\n");
-		fprintf(stderr,"\t-c [colspec]\tSet extraction to N-,N-M, or -M like cut\n");
+		fprintf(stderr,"\t-c [colspec]\tSet extraction to N-, N-M, or -M like cut\n");
 		fprintf(stderr,"\t-d [val]\tSet delimiter to character, decimal value, or 0x-style hex value\n");
 		fprintf(stderr,"\t-f [field]\tSet extraction to field number. Starts at 1\n");
+		fprintf(stderr,"\t-n\t\tDisable extension exclusion entirely (equivalent to -x /dev/null)\n");
 		fprintf(stderr,"\t-t\t\tDisable extension expansion (file.txt -> file.txt.[hashtype], etc.)\n");
 		fprintf(stderr,"\t-x file\t\tRead excluded extension list from file, replacing default)\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
