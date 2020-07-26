@@ -29,7 +29,7 @@
  * is an artifact of how I process my local files - you can suppress this
  * processing with the -t and -x options.
  *
- * First, I organize files by name, and then extension.  file.orig is the 
+ * First, I organize files by name, and then extension.  file.orig is the
  * original file, and is not touched after initial use.
  * file.txt is the list of unsolved hashes
  * file.MD5x01 (for example) is the solved hashes
@@ -46,7 +46,7 @@
  * files associated with a given list.  getpass does this by recognizing
  * .txt, and then expanding that to all files associated with the name
  * by replacing .txt with .*, and looking up all files with matching names.
- * 
+ *
  * This means getpass 50m.txt will search out all filenames with hash
  * solutions for any kind of hash, associated with the 50m list, and then
  * extract the passwords from from the solved hash lists.
@@ -54,7 +54,7 @@
  * You can suppress this behaviour with -n -t (to disable exclude lists, and
  * .txt file processing)
  *
- * 
+ *
  */
 
 static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.3 2020/07/26 16:52:47 dlr Exp dlr $";
@@ -331,7 +331,7 @@ void fprocess(char *file, char **Exclude) {
     if (!cur) {
         fprintf(stderr,"Out of memory processing wildcard %s\n",file);
 	exit(1);
-    } 
+    }
     t = strrchr(cur,'.');
     if (!t) {
         fprintf(stderr,"Can't find final '.' in %s\n",file);
@@ -364,7 +364,7 @@ skip:   ex = 0;
     globfree(&myglob);
     free(cur);
 }
-    
+
 
 
 
@@ -394,9 +394,9 @@ int main(int argc,char **argv) {
     Delim = ':';
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "tunx:d:c:f:")) != -1) {
+    while ((ch = getopt(argc, argv, "htunx:d:c:f:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "tunx:d:c:f:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "htunx:d:c:f:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case 't':
@@ -468,14 +468,22 @@ int main(int argc,char **argv) {
 		fclose(fi);
 		break;
 
+	    case 'h':
 	    default:
 		v = Version;while (*v++ != ' ');while (*v++ !=' ');
 	        fprintf(stderr,"getpass Version %s\n\n",v);
 		fprintf(stderr,"extract passwords from result files\n");
-		fprintf(stderr,"\t-d [val]\t\tSet Delimter to character, decimal value, or 0x-style hex value\n");
+		fprintf(stderr,"\n");
 		fprintf(stderr,"\t-c [colspec]\tSet extraction to N-,N-M, or -M like cut\n");
+		fprintf(stderr,"\t-d [val]\tSet delimiter to character, decimal value, or 0x-style hex value\n");
 		fprintf(stderr,"\t-f [field]\tSet extraction to field number. Starts at 1\n");
-		fprintf(stderr,"\t-x file\t\tRead exclude extension list from file, replacing default\n");
+		fprintf(stderr,"\t-t\t\tDisable extension expansion (file.txt -> file.txt.[hashtype], etc.)\n");
+		fprintf(stderr,"\t-x file\t\tRead excluded extension list from file, replacing default)\n");
+		fprintf(stderr,"\t-h\t\tThis help\n");
+		fprintf(stderr,"\n");
+		fprintf(stderr,"Default excluded extensions:\n\t");
+		for (x=0; Skipfiles[x]; x++) fprintf(stderr,"%s ",Skipfiles[x]);
+		fprintf(stderr,"\n\n");
 		exit(1);
 	}
     }
