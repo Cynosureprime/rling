@@ -25,10 +25,13 @@
  * Ever. :-)
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.3 2020/07/25 01:17:14 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.4 2020/07/26 16:53:22 dlr Exp dlr $";
 
 /*
  * $Log: rehex.c,v $
+ * Revision 1.4  2020/07/26 16:53:22  dlr
+ * wildcard expansion for windows
+ *
  * Revision 1.3  2020/07/25 01:17:14  dlr
  * Minor updates for llen
  *
@@ -48,6 +51,7 @@ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.3 2020/07/
 char *Cache;
 uint64_t Cachesize;
 int Unhex;
+int _dowildcard = -1; /* enable wildcard expansion for Windows */
 
 /*
  * findeol(pointer, length)

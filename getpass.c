@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <inttypes.h>
 #include <string.h>
+#include <glob.h>
 #ifndef _AIX
 #include <getopt.h>
 #endif
@@ -23,12 +24,49 @@
  * certain fields or columns, and the like.
  * As with the rest of the utilities, getpass strives to have unlimited line
  * lengths, and auto-sizes the buffers to accomplish this.
+ *
+ * By default, getpass does some special processing of file names.  This
+ * is an artifact of how I process my local files - you can suppress this
+ * processing with the -t and -x options.
+ *
+ * First, I organize files by name, and then extension.  file.orig is the 
+ * original file, and is not touched after initial use.
+ * file.txt is the list of unsolved hashes
+ * file.MD5x01 (for example) is the solved hashes
+ * file.SHA1x02 and so on, as each new type of hash is discovered.
+ * mdsplit does this automtically.
+ *
+ * To accomodate this, I have a built-in list of "exclude" extensions, such
+ * as .txt, .salt, .orig and so forth.
+ * You can replace this with a list of your own, or read a list of new
+ * extentions by placing them into a file (one per line), and using
+ * x [filename] to read them into getpass
+ *
+ * The .txt file, therefore, can be used as a sort of "name" for all
+ * files associated with a given list.  getpass does this by recognizing
+ * .txt, and then expanding that to all files associated with the name
+ * by replacing .txt with .*, and looking up all files with matching names.
+ * 
+ * This means getpass 50m.txt will search out all filenames with hash
+ * solutions for any kind of hash, associated with the 50m list, and then
+ * extract the passwords from from the solved hash lists.
+ *
+ * You can suppress this behaviour with -n -t (to disable exclude lists, and
+ * .txt file processing)
+ *
+ * 
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.1 2020/07/25 01:17:14 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.3 2020/07/26 16:52:47 dlr Exp dlr $";
 
 /*
  * $Log: getpass.c,v $
+ * Revision 1.3  2020/07/26 16:52:47  dlr
+ * wildcard expansion for windows
+ *
+ * Revision 1.2  2020/07/26 16:49:28  dlr
+ * Add special processing for .txt file
+ *
  * Revision 1.1  2020/07/25 01:17:14  dlr
  * Initial revision
  *
@@ -43,6 +81,7 @@ char *Cache;
 uint64_t Cachesize;
 int Unhex,Fieldnum,Colstart,Colend;
 int Delim;
+int _dowildcard = -1; /* enable wildcard expansion for Windows */
 
 /*
  * findeol(pointer, length)
@@ -278,6 +317,58 @@ nextline:
     }
 }
 
+void fprocess(char *file, char **Exclude) {
+    char *cur, *t;
+    glob_t myglob;
+    size_t f,x, ex;
+    int fsize, exsize;
+    FILE *fi;
+
+    myglob.gl_offs = 0;
+    myglob.gl_pathc = 0;
+    myglob.gl_pathv = NULL;
+    cur = strdup(file);
+    if (!cur) {
+        fprintf(stderr,"Out of memory processing wildcard %s\n",file);
+	exit(1);
+    } 
+    t = strrchr(cur,'.');
+    if (!t) {
+        fprintf(stderr,"Can't find final '.' in %s\n",file);
+	free(cur);
+	return;
+    }
+    t[1] = '*';t[2] = 0;
+    glob(cur,0,NULL,&myglob);
+    for (f=0; f < myglob.gl_pathc; f++) {
+	fsize = strlen(myglob.gl_pathv[f]);
+	for (ex=0; Exclude[ex]; ex++) {
+	    exsize = strlen(Exclude[ex]);
+	    if (exsize < fsize) {
+		if (strcmp(&myglob.gl_pathv[f][fsize-exsize],Exclude[ex]) == 0) {
+		    fprintf(stderr,"Skipping \"%s\" because of exclude %s\n",myglob.gl_pathv[f],Exclude[ex]);
+		    goto skip;
+		}
+	    }
+	}
+	fi = fopen(myglob.gl_pathv[f],"rb");
+	if (!fi) {
+	    fprintf(stderr,"Can't open %s, skipping\n",myglob.gl_pathv[f]);
+	    continue;
+	}
+	process(fi,myglob.gl_pathv[f]);
+	fclose(fi);
+skip:   ex = 0;
+    }
+
+    globfree(&myglob);
+    free(cur);
+}
+    
+
+
+
+
 
 char *Skipfiles[] = {
     ".txt",".orig",".test",".csalt.txt",".fixme",".new",NULL
@@ -289,12 +380,13 @@ int main(int argc,char **argv) {
     FILE *fi;
     char *v,buffer[CACHESIZE+16];
     char **Exclude;
-    int Excludesize;
+    int Excludesize, DisableTxt;
 #ifndef _AIX
     struct option longopt[] = {
 	{NULL,0,NULL,0}
     };
 #endif
+    DisableTxt =0;
     Exclude = Skipfiles;
     Cache = NULL;
     Cachesize = 0;
@@ -302,11 +394,14 @@ int main(int argc,char **argv) {
     Delim = ':';
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "unx:d:c:f:")) != -1) {
+    while ((ch = getopt(argc, argv, "tunx:d:c:f:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "unx:d:c:f:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "tunx:d:c:f:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
+	    case 't':
+	        DisableTxt = 1;
+		break;
 	    case 'n':
 	        Exclude = NULL;
 		break;
@@ -391,13 +486,18 @@ int main(int argc,char **argv) {
         process(stdin,"stdin");
 for (x=0; x<argc; x++) {
         if (Exclude) {
-	    for (ex=0; Exclude[ex]; ex++) {
-	        exsize = strlen(Exclude[ex]);
-		fsize = strlen(argv[x]);
-		if (exsize < strlen(argv[x])) {
-		    if (strcmp(&argv[x][fsize-exsize],Exclude[ex]) == 0) {
-		        fprintf(stderr,"Skipping \"%s\" because of exclude %s\n",argv[x],Exclude[ex]);
-			goto skip;
+	    fsize = strlen(argv[x]);
+	    if (DisableTxt == 0 && fsize > 4 && strcmp(&argv[x][fsize-4],".txt") == 0) {
+	       fprocess(argv[x],Exclude);
+	       goto skip;
+	    } else {
+		for (ex=0; Exclude[ex]; ex++) {
+		    exsize = strlen(Exclude[ex]);
+		    if (exsize < fsize) {
+			if (strcmp(&argv[x][fsize-exsize],Exclude[ex]) == 0) {
+			    fprintf(stderr,"Skipping \"%s\" because of exclude %s\n",argv[x],Exclude[ex]);
+			    goto skip;
+			}
 		    }
 		}
 	    }
