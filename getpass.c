@@ -57,10 +57,13 @@
  *
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.3 2020/07/26 16:52:47 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.4 2020/07/26 19:05:52 dlr Exp dlr $";
 
 /*
  * $Log: getpass.c,v $
+ * Revision 1.4  2020/07/26 19:05:52  dlr
+ * Merge changes from Royce
+ *
  * Revision 1.3  2020/07/26 16:52:47  dlr
  * wildcard expansion for windows
  *
