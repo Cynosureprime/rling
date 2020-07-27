@@ -107,9 +107,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.45 2020/07/25 18:26:37 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.46 2020/07/27 20:08:07 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.46  2020/07/27 20:08:07  dlr
+ * Add statistics option to -q main output.  -q cslw will output count, sstats,
+ * length, then the word.  Great to show you the "50%" return point.
+ *
  * Revision 1.45  2020/07/25 18:26:37  dlr
  * Improved speed by using qsort_mt for Frequency analysis.  Add better
  * histogram reporting to -q h and -q a options.
@@ -1808,7 +1812,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	    case 'l':
 		if (t[1] == '-' || isdigit(t[1]))
 		    lcol = atoi(&t[1]);
-		fprintf(fo,"%*s",lcol,"Length");
+		fprintf(fo,"%*s ",lcol,"Length");
 		anyvalid = 1;
 		*l++ = c;
 		break;
@@ -1819,12 +1823,18 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 		anyvalid = 1;
 		*l++ = c;
 		break;
+	    case 's':
+		fprintf(fo," Percent   Cumul ");
+		*l++ = c;
+	    	break;
 	    default:
 		break;
 	}
     }
     if (anyvalid) {fputc('\n',fo);Write_global++;}
     *l = 0;
+    totcumu = 0;
+    curperc = cumuperc = 0.0;
     for (x=0; anyvalid && x < Line; x++) {
 	if (Freq[x].key == NULL) break;
 	for (l=lopts; (c = *l); l++) {
@@ -1838,6 +1848,14 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 		    break;
 		case 'l':
 		    fprintf(fo,"%*u ",lcol,Freq[x].len);
+		    break;
+		case 's':
+		    if (Line) {
+			totcumu += Freq[x].count;
+			curperc = ((double)Freq[x].count * 100.0)/(double)Line;
+			cumuperc = ((double)totcumu* 100.0)/(double)Line;
+		    }
+		    fprintf(fo," %6.2f%% %6.2f%% ",curperc,cumuperc);
 		    break;
 		case 'w':
 		    fwrite(Freq[x].key,Freq[x].len,1,fo);
@@ -1975,7 +1993,7 @@ errexit:
 		fprintf(stderr,"\t-2\t\tUse rli2 mode - all files must be sorted. Low mem usage.\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
 		fprintf(stderr,"\t-T path\t\tDirectory to store temp files in\n");
-		fprintf(stderr,"\t-q [cahwl]\tDo frequency analysis on input\n\t\t\ta - all output, c - count, l - length, w - word,\n\t\t\th - append histogram\n");
+		fprintf(stderr,"\t-q [cahwl]\tDo frequency analysis on input\n\t\t\ta - all output, c - count, l - length, w - word,\n\t\t\ts - running statistics, h - append histogram\n");
 		fprintf(stderr,"\t\t\tAdditional files will be matched against input files\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
 		fprintf(stderr,"\n\tstdin and stdout can be used in the place of any filename\n");
@@ -2003,7 +2021,7 @@ errexit:
 		qopts = strdup(optarg);
 		y = 0;
 		for (x=0; x <strlen(qopts); x++) {
-		    if (strchr("cahwl",qopts[x]))
+		    if (strchr("cahwls",qopts[x]))
 			y = 1;
 		}
 		if (y == 0) {
