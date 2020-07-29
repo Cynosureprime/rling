@@ -107,9 +107,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.46 2020/07/27 20:08:07 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.47 2020/07/29 07:10:54 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.47  2020/07/29 07:10:54  dlr
+ * Improve -2 mode - no third file required.
+ *
  * Revision 1.46  2020/07/27 20:08:07  dlr
  * Add statistics option to -q main output.  -q cslw will output count, sstats,
  * length, then the word.  Great to show you the "50%" return point.
@@ -1626,6 +1629,7 @@ void rli2(int argc, char **argv) {
     char *eol,*linein;
     uint64_t memsize;
     struct InHeap *heap;
+    struct Infiles nullfile;
     int heapcnt = argc-2;
 
 
@@ -1633,10 +1637,22 @@ void rli2(int argc, char **argv) {
 
     lsize = MaxMem / argc;
     Infile = calloc(sizeof(struct Infiles),argc);
-    heap = calloc(sizeof(struct InHeap),heapcnt);
+    heap = calloc(sizeof(struct InHeap),heapcnt+1);
     if (!Infile || !heap) {
 	fprintf(stderr,"Out of memory initializing structures\n");
 	exit(1);
+    }
+    if (heapcnt == 0) {
+       nullfile.fi =NULL;
+       nullfile.fn ="null";
+       nullfile.line = 0;
+       nullfile.Buffer = "\n";
+       nullfile.size=nullfile.curpos=nullfile.end=0;
+       nullfile.unique=nullfile.dup = 0;
+       nullfile.eof =1;
+       nullfile.curline=nullfile.Buffer;
+       nullfile.curlen = 0;
+       heap[0].In = &nullfile;
     }
     memsize = argc*sizeof(struct Infiles) + heapcnt*sizeof(struct InHeap);
     for (x=0; x < argc; x++) {
@@ -2134,10 +2150,6 @@ errexit:
 	}
     }
     if (ProcMode == 3) {
-	if (argc < 3) {
-	    fprintf(stderr,"Need at least an input, output and remove file for sorted remove mode\n");
-	    exit(1);
-	}
 	rli2(argc,argv);
 	exit(0);
     }

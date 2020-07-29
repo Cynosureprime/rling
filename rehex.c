@@ -25,10 +25,13 @@
  * Ever. :-)
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.4 2020/07/26 16:53:22 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.5 2020/07/29 06:13:42 dlr Exp dlr $";
 
 /*
  * $Log: rehex.c,v $
+ * Revision 1.5  2020/07/29 06:13:42  dlr
+ * Better support for windows binary i/o
+ *
  * Revision 1.4  2020/07/26 16:53:22  dlr
  * wildcard expansion for windows
  *
@@ -282,13 +285,23 @@ int main(int argc,char **argv) {
     }
     argc -= optind;
     argv += optind;
+#ifdef _WIN32
+setmode(1,O_BINARY);
+#endif
 
-    if (argc == 0)
+    if (argc == 0) {
+#ifdef _WIN32
+setmode(0,O_BINARY);
+#endif
         process(stdin,"stdin");
+    }
     for (x=0; x<argc; x++) {
-	if (strcmp(argv[x],"stdin") == 0)
+	if (strcmp(argv[x],"stdin") == 0) {
 	    fi = stdin;
-	else
+#ifdef _WIN32
+setmode(0,O_BINARY);
+#endif
+	} else
 	    fi = fopen(argv[x],"rb");
 	if (!fi) {
 	    fprintf(stderr,"Can't open %s, skipping\n",argv[x]);
