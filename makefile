@@ -8,7 +8,7 @@
 COPTS=-DINTEL
 #COPTS=-DPOWERPC -DAIX -maltivec -maix64
 
-all: rling getpass rehex splitlen
+all: rling getpass rehex splitlen dedupe
 
 yarn.o: yarn.c
 	cc -fomit-frame-pointer -pthread -O3 $(COPTS) -c yarn.c
@@ -31,6 +31,9 @@ rehex: rehex.c
 splitlen: splitlen.c
 	cc -fomit-frame-pointer -O3  $(COPTS) -o splitlen splitlen.c
 
+dedupe: dedupe.c
+	cc -fomit-frame-pointer -O3  $(COPTS) -o dedupe dedupe.c -lJudy
+
 clean:
-	rm -f rling getpass rehex splitlen
+	rm -f rling getpass rehex splitlen dedupe
 	rm -f qsort_mt.o rling.o yarn.o
