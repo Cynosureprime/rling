@@ -18,7 +18,11 @@
 /* FreeBSD has the old-old DBM as default.  We want at least version 5 */
 #include <db5/db.h>
 #else
+#ifdef __MACH__
+#include "db.h"
+#else
 #include <db.h>
+#endif
 #endif
 
 #include "yarn.h"
@@ -107,9 +111,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.48 2020/07/30 16:07:46 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.49 2020/07/30 23:01:44 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.49  2020/07/30 23:01:44  dlr
+ * Portability for clang
+ *
  * Revision 1.48  2020/07/30 16:07:46  dlr
  * Add total runtime
  *
@@ -1566,7 +1573,7 @@ void getnextline(struct Infiles *infile) {
  */
 void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
     if (len > outfile->size) {
-        fprintf(stderr,"You tried to write %"PRIu64" bytes, but the buffer size is %"PRIu64"\n",len,outfile->size);
+        fprintf(stderr,"You tried to write %"PRIu64" bytes, but the buffer size is %"PRIu64"\n",(uint64_t)len,(uint64_t)outfile->size);
 	fprintf(stderr,"Use -M option to make the buffers bigger\n");
 	exit(1);
     }
@@ -1755,7 +1762,7 @@ void rli2(int argc, char **argv) {
 		    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 		    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 		    fprintf(stderr,
-			    "%s file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines, %.4f seconds elapsed\n",(DoCommon)?"Common":"Remove",heap[0].In->fn,heap[0].In->unique,heap[0].In->dup,wtime);
+			    "%s file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines, %.4f seconds elapsed\n",(DoCommon)?"Common":"Remove",heap[0].In->fn,(uint64_t)heap[0].In->unique,(uint64_t)heap[0].In->dup,wtime);
 		}
 		reheap(heap,heapcnt);
 	    }
@@ -1772,7 +1779,7 @@ void rli2(int argc, char **argv) {
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-    fprintf(stderr,"Input file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines) read. %.4f seconds elapsed\n",Infile[0].fn,Infile[0].unique,Infile[0].dup,wtime);
+    fprintf(stderr,"Input file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines) read. %.4f seconds elapsed\n",Infile[0].fn,(uint64_t)Infile[0].unique,(uint64_t)Infile[0].dup,wtime);
     fprintf(stderr,"%s total lines written, %"PRIu64" lines %s\n",commify(Write),rem,(DoCommon)?"in common":"removed");
     for (x=0; x < argc; x++) {
 	fclose(Infile[x].fi);
@@ -2462,7 +2469,7 @@ errexit:
 	possess(FreeWaiting);
 	wait_for(FreeWaiting,TO_BE,Maxt);
 	release(FreeWaiting);
-	fprintf(stderr,"%"PRIu64" bytes total\nCounting lines...     ",ftell(fi));
+	fprintf(stderr,"%"PRIu64" bytes total\nCounting lines...     ",(uint64_t)ftell(fi));
 	fclose(fi);
 
 	current_utc_time(&curtime);
