@@ -26,10 +26,13 @@
  * different lines may hash to the same value).  
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/dedupe.c,v 1.3 2020/07/30 22:02:47 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/dedupe.c,v 1.4 2020/07/30 23:07:20 dlr Exp dlr $";
 
 /*
  * $Log: dedupe.c,v $
+ * Revision 1.4  2020/07/30 23:07:20  dlr
+ * change -h to -x, add -h and -? as help
+ *
  * Revision 1.3  2020/07/30 22:02:47  dlr
  * Portability improvements for clang
  *
@@ -344,18 +347,20 @@ int main(int argc,char **argv) {
     Unhex = 0;
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "uh")) != -1) {
+    while ((ch = getopt(argc, argv, "?hux")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "uh",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?hux",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
-	    case 'h':
+	    case 'x':
 	        Dohash = 1;
-		fprintf(stderr,"Hashed mode active\n");
+		fprintf(stderr,"xxHash mode active\n");
 		break;
 	    case 'u':
 	        Unhex = 1;
 		break;
+	    case 'h':
+	    case '?':
 	    default:
 		v = Version;
 		while (*v++ != ' ')
@@ -363,7 +368,7 @@ int main(int argc,char **argv) {
 		while (*v++ !=' ')
 		    ;
 	        fprintf(stderr,"dedupe Version %s\n\ndedupe [-u] [file file...]\nIf no files supplied, reads from stdin.  Always writes to stdout\nIf stdin is used as a filename, the actual stdin will read\n",v);
-		fprintf(stderr,"\t-h\t\tUse a hashed representation of line. Saves memory\n");
+		fprintf(stderr,"\t-x\t\tUse xxHash to hash each line. Saves memory\n");
 		exit(1);
 	}
     }
