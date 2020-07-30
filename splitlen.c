@@ -40,10 +40,13 @@
  * If an output file exists, it is appended to.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.3 2020/07/30 16:07:22 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.4 2020/07/30 22:02:47 dlr Exp dlr $";
 
 /*
  * $Log: splitlen.c,v $
+ * Revision 1.4  2020/07/30 22:02:47  dlr
+ * Portability improvements for clang
+ *
  * Revision 1.3  2020/07/30 16:07:22  dlr
  * Minor optimization
  *
@@ -291,7 +294,7 @@ void Write(int64_t len,char *out,size_t size) {
     fo = getfo(len,&OutCache);
     if (fo && size) {
         if (fwrite(out,size,1,fo) != 1) {
-	   fprintf(stderr,"Write error - could not write %"PRIu64" bytes\n",size);
+	   fprintf(stderr,"Write error - could not write %"PRIu64" bytes\n",(uint64_t)size);
 	   perror(OutCache->OutName);
 	   exit(1);
 	}
@@ -442,7 +445,11 @@ int main(int argc,char **argv) {
 	    case '?':
 	    case 'h':
 	    default:
-		v = Version;while (*v++ != ' ');while (*v++ !=' ');
+		v = Version;
+		while (*v++ != ' ')
+		    ;
+		while (*v++ !=' ')
+		    ;
 	        fprintf(stderr,"splitlen Version %s\n\n",v);
 		fprintf(stderr,"splitlen -o filename file [..file]\n");
 		fprintf(stderr,"\t-u\t\tRemove $HEX[] encoding from input\n");

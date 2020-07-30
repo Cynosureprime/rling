@@ -25,10 +25,13 @@
  * Ever. :-)
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.5 2020/07/29 06:13:42 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.6 2020/07/30 22:02:47 dlr Exp dlr $";
 
 /*
  * $Log: rehex.c,v $
+ * Revision 1.6  2020/07/30 22:02:47  dlr
+ * Portability improvements for clang
+ *
  * Revision 1.5  2020/07/29 06:13:42  dlr
  * Better support for windows binary i/o
  *
@@ -278,7 +281,11 @@ int main(int argc,char **argv) {
 	        Unhex = 1;
 		break;
 	    default:
-		v = Version;while (*v++ != ' ');while (*v++ !=' ');
+		v = Version;
+		while (*v++ != ' ')
+		    ;
+		while (*v++ !=' ')
+		    ;
 	        fprintf(stderr,"rehex Version %s\n\nrehex [-u] [file file...]\nIf no files supplied, reads from stdin.  Always writes to stdout\nIf stdin is used as a filename, the actual stdin will read\n",v);
 		exit(1);
 	}

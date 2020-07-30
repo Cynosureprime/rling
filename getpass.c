@@ -57,10 +57,13 @@
  *
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.5 2020/07/29 06:13:42 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.6 2020/07/30 22:02:47 dlr Exp dlr $";
 
 /*
  * $Log: getpass.c,v $
+ * Revision 1.6  2020/07/30 22:02:47  dlr
+ * Portability improvements for clang
+ *
  * Revision 1.5  2020/07/29 06:13:42  dlr
  * Better support for windows binary i/o
  *
@@ -476,7 +479,11 @@ int main(int argc,char **argv) {
 
 	    case 'h':
 	    default:
-		v = Version;while (*v++ != ' ');while (*v++ !=' ');
+		v = Version;
+		while (*v++ != ' ')
+		    ;
+		while (*v++ !=' ')
+		    ;
 	        fprintf(stderr,"getpass Version %s\n\n",v);
 		fprintf(stderr,"extract passwords from result files\n");
 		fprintf(stderr,"\n");

@@ -26,10 +26,13 @@
  * different lines may hash to the same value).  
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/dedupe.c,v 1.2 2020/07/30 17:47:42 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/dedupe.c,v 1.3 2020/07/30 22:02:47 dlr Exp dlr $";
 
 /*
  * $Log: dedupe.c,v $
+ * Revision 1.3  2020/07/30 22:02:47  dlr
+ * Portability improvements for clang
+ *
  * Revision 1.2  2020/07/30 17:47:42  dlr
  * Add some comments
  *
@@ -243,11 +246,11 @@ again:
 		}
 	    } else {
      		in[hexlen] = 0;
-	        JSLG(ret,PLstr,in);
+	        JSLG(ret,PLstr,(unsigned char *)in);
 		if (ret) 
 		    *ret = *ret + 1;
 		else {
-		    JSLI(ret,PLstr, in);
+		    JSLI(ret,PLstr, (unsigned char *)in);
 		    *ret = 1;
 		    in[hexlen] = '\n';
 		    if (fwrite(in,hexlen+1,1,stdout) != 1) {
@@ -305,11 +308,11 @@ again:
 		}
 	    } else {
      		in[llen] = 0;
-	        JSLG(ret,PLstr,in);
+	        JSLG(ret,PLstr,(unsigned char *)in);
 		if (ret) 
 		    *ret = *ret + 1;
 		else {
-		    JSLI(ret,PLstr, in);
+		    JSLI(ret,PLstr, (unsigned char *)in);
 		    *ret = 1;
 		    in[llen] = '\n';
 		    if (fwrite(in,llen+1,1,stdout) != 1) {
@@ -354,7 +357,11 @@ int main(int argc,char **argv) {
 	        Unhex = 1;
 		break;
 	    default:
-		v = Version;while (*v++ != ' ');while (*v++ !=' ');
+		v = Version;
+		while (*v++ != ' ')
+		    ;
+		while (*v++ !=' ')
+		    ;
 	        fprintf(stderr,"dedupe Version %s\n\ndedupe [-u] [file file...]\nIf no files supplied, reads from stdin.  Always writes to stdout\nIf stdin is used as a filename, the actual stdin will read\n",v);
 		fprintf(stderr,"\t-h\t\tUse a hashed representation of line. Saves memory\n");
 		exit(1);
