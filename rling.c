@@ -107,9 +107,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.47 2020/07/29 07:10:54 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.48 2020/07/30 16:07:46 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.48  2020/07/30 16:07:46  dlr
+ * Add total runtime
+ *
  * Revision 1.47  2020/07/29 07:10:54  dlr
  * Improve -2 mode - no third file required.
  *
@@ -1937,7 +1940,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
  */
 
 int main(int argc, char **argv) {
-    struct timespec starttime,curtime;
+    struct timespec starttime,curtime, inittime;
     double wtime;
     int64_t llen;
     uint64_t Line, Estline,  RC, Totrem;
@@ -1982,6 +1985,7 @@ int main(int argc, char **argv) {
     ProcMode = Hidebit =  DoCommon = 0;
     Maxt = get_nprocs();
     current_utc_time(&starttime);
+    current_utc_time(&inittime);
 #ifdef _AIX
     while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:T:M:")) != -1) {
 #else
@@ -2151,7 +2155,7 @@ errexit:
     }
     if (ProcMode == 3) {
 	rli2(argc,argv);
-	exit(0);
+	goto finalexit;
     }
 
     Minlen_global = (uint64_t)-1L;
@@ -2929,6 +2933,13 @@ errexit:
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
     fprintf(stderr,"\nWrote %s lines in %.4f seconds\n",commify(Write_global),wtime);
+
+finalexit:
+    current_utc_time(&curtime);
+    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+    wtime -= (double) inittime.tv_sec + (double) (inittime.tv_nsec) / 1000000000.0;
+    fprintf(stderr,"Total runtime %.4f seconds\n",wtime);
+
 
     if (Workthread) {
 	possess(FreeWaiting);

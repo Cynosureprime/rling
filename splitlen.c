@@ -40,10 +40,13 @@
  * If an output file exists, it is appended to.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.2 2020/07/29 07:13:47 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.3 2020/07/30 16:07:22 dlr Exp dlr $";
 
 /*
  * $Log: splitlen.c,v $
+ * Revision 1.3  2020/07/30 16:07:22  dlr
+ * Minor optimization
+ *
  * Revision 1.2  2020/07/29 07:13:47  dlr
  * Add missing time.h include
  *
@@ -292,7 +295,7 @@ void Write(int64_t len,char *out,size_t size) {
 	   perror(OutCache->OutName);
 	   exit(1);
 	}
-	if ((size == 1 && out[0] == '\n') || (size == 2 && out[1] == '\n'))
+	if (out[size-1] == '\n')
 	    OutCache->lines++;
     }
 }
@@ -366,8 +369,8 @@ again:
 	        hexlen = get32(&in[5],in);
 	    } else
 	        hexlen = llen;
-	    Write(hexlen,in,hexlen);
-	    Write (hexlen,"\n",1);
+	    in[hexlen] = '\n';
+	    Write(hexlen,in,hexlen+1);
 	} else {
 	    for (needshex = x = 0; !needshex && x <llen; x++) {
 		needshex = in[x] <= ' '  || in[x] > 126;
@@ -386,8 +389,8 @@ again:
 		if (Tlen) Write(flen,Temp,Tlen);
 		Write(flen,"]\n",2);
 	    } else {
-                Write(llen, in, llen);
-		Write(llen,"\n",1);
+		in[llen] ='\n';
+                Write(llen, in, llen+1);
 	    }
 	}
 	cur += len + 1;
