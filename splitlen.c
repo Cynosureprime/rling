@@ -42,10 +42,13 @@
  * If an output file exists, it is appended to.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.6 2020/07/31 21:39:06 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.7 2020/07/31 21:48:49 dlr Exp dlr $";
 
 /*
  * $Log: splitlen.c,v $
+ * Revision 1.7  2020/07/31 21:48:49  dlr
+ * Add help for new options
+ *
  * Revision 1.6  2020/07/31 21:39:06  dlr
  * Add -s option to offer single-file sorted-by-length output
  *
@@ -590,6 +593,8 @@ int main(int argc,char **argv) {
 		fprintf(stderr,"\t\t\tThe char %c will be replaced with _length in filename\n",OutLenId);
 		fprintf(stderr,"\t\t\tIf no %c is in filename, _len will len appended to name\n",OutLenId);
 		fprintf(stderr,"\t-c char\t\tUse char as place to insert number in -o file\n");
+ 		fprintf(stderr,"\t-s\t\tSorts by length into a single output file.\n");
+ 		fprintf(stderr,"\t-M size\t\tSets the final buffer size for -s option\n");
 		fprintf(stderr,"\t-S exp\t\tSets $HEX[] conversion for char or range\n");
 		fprintf(stderr,"\t-U exp\t\tResets $HEX[] conversion for char or range\n");
 		fprintf(stderr,"\t\t\tSpecify a character like a,b,c, or a range like a-f,\n");
