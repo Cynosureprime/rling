@@ -40,10 +40,13 @@
  * If an output file exists, it is appended to.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.4 2020/07/30 22:02:47 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.5 2020/07/31 02:36:55 dlr Exp dlr $";
 
 /*
  * $Log: splitlen.c,v $
+ * Revision 1.5  2020/07/31 02:36:55  dlr
+ * Add -S/-U to allow $HEX[] map forcing.
+ *
  * Revision 1.4  2020/07/30 22:02:47  dlr
  * Portability improvements for clang
  *
@@ -146,6 +149,24 @@ inline char *findeol(char *s, int64_t l) {
   return (NULL);
 }
 #endif
+
+char MustHex[] = { 
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 00-0f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 10-1f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 20-2f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, /* 30-3f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 40-4f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 50-5f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 60-6f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, /* 70-7f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 80-8f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 90-9f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* a0-af */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* b0-bf */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* c0-cf */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* d0-df */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* e0-ef */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};/* f0-ff */
 
 char ToHex[] = "0123456789abcdef";
 unsigned char trhex[] = {
@@ -375,9 +396,8 @@ again:
 	    in[hexlen] = '\n';
 	    Write(hexlen,in,hexlen+1);
 	} else {
-	    for (needshex = x = 0; !needshex && x <llen; x++) {
-		needshex = in[x] <= ' '  || in[x] > 126;
-	    }
+	    for (needshex = x = 0; !needshex && x <llen; x++) 
+		needshex |= MustHex[(unsigned char)in[x]];
 	    if (needshex) {
 		flen = llen * 2 + 6;
 		Write(flen,"$HEX[",5);
@@ -402,6 +422,43 @@ again:
 }
 
 
+void getval (char **i, int *val) {
+    char *v = *i;
+    if (!*v) return;
+    if (*v == '-' || *v == ',') v++;
+    if (*v == '0' && v[1] == 'x' && sscanf(v,"0x%x",val) == 1) {
+        if (*val < 0 || *val > 255) {
+            fprintf(stderr,"Hex value out of range at: %s\n",*i);
+	    exit(1);
+	}
+	v += 2;
+	while (*v) {
+	    if (*v == ',' || *v == '-') break;
+	    v++;
+	}
+	*i = v;
+	return;
+    }
+    if (isdigit(*v)) {
+        *val = atoi(v);
+	if (*val < 0 || *val > 255) {
+	    fprintf(stderr,"Invalid number at: %s\n",*i);
+	    exit(1);
+	}
+	while (*v && isdigit(*v)) {
+	    v++;
+	}
+	*i = v;
+	return;
+    }
+    *val = *v++;
+    if (*val < 0 || *val > 255) {
+	fprintf(stderr,"Invalid number at: %s\n",*i);
+	exit(1);
+    }
+    *i = v;
+}
+
 int main(int argc,char **argv) {
     int ch,x;
     FILE *fi;
@@ -418,11 +475,29 @@ int main(int argc,char **argv) {
     Unhex = 0;
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?huo:c:")) != -1) {
+    while ((ch = getopt(argc, argv, "?huo:c:S:U:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?huo:c:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?huo:c:S:U:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
+	    case 'S':
+	    case 'U':
+	        v = optarg;
+		while (*v) {
+		    int start,end;
+		    getval(&v,&start);
+		    end = start;
+		    if (*v == '-') getval(&v, &end);
+		    for (x=start; x <= end; x++)
+		       MustHex[x] = (ch =='S')? 1 : 0;
+		}
+		fprintf(stderr,"Will map characters to $HEX[] if a 1 in that character position");
+		for (x=0; x <256; x++) {
+		    if ((x%32) == 0) fprintf(stderr,"\n%02x-%02x:",x,x+31);
+		    fprintf(stderr,"%d",MustHex[x]);
+		}
+		fprintf(stderr,"\n");
+		break;
 	    case 'c':
 	        OutLenId = optarg[0];
 		break;
@@ -457,6 +532,10 @@ int main(int argc,char **argv) {
 		fprintf(stderr,"\t\t\tThe char %c will be replaced with _length in filename\n",OutLenId);
 		fprintf(stderr,"\t\t\tIf no %c is in filename, _len will len appended to name\n",OutLenId);
 		fprintf(stderr,"\t-c char\t\tUse char as place to insert number in -o file\n");
+		fprintf(stderr,"\t-S exp\t\tSets $HEX[] conversion for char or range\n");
+		fprintf(stderr,"\t-U exp\t\tResets $HEX[] conversion for char or range\n");
+		fprintf(stderr,"\t\t\tSpecify a character like a,b,c, or a range like a-f,\n");
+		fprintf(stderr,"\t\t\t0x61-0x66 or as decimal values line 0-32.\n");
 		
 		exit(1);
 	}

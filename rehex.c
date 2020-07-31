@@ -23,12 +23,24 @@
  *
  * you can "unhex" the input with the -u flag, but no one should do that.
  * Ever. :-)
+ *
+ * -S and -U allows you specify which characters are considered for $HEX[]
+ * encoding.  You can specify them as characters "abc", or "a,b,f", as
+ * decimal values like "0,1,2,3,4,5,10,15", or hex values "0x00,0x1,0x02"
+ * or as ranges "a-f", "0-10","0x1a-0x1f".   -S sets, and -U unsets the
+ * character as being considered.  If any character in a given line contains
+ * one or more marked values (appearing as a 1 in the map), then the entire
+ * line is marked as $HEX[] required.  You can force no hex conversion
+ * with -U 0-255.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.6 2020/07/30 22:02:47 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rehex.c,v 1.7 2020/07/31 02:36:55 dlr Exp dlr $";
 
 /*
  * $Log: rehex.c,v $
+ * Revision 1.7  2020/07/31 02:36:55  dlr
+ * Add -S/-U to allow $HEX[] map forcing.
+ *
  * Revision 1.6  2020/07/30 22:02:47  dlr
  * Portability improvements for clang
  *
@@ -122,6 +134,25 @@ inline char *findeol(char *s, int64_t l) {
 }
 #endif
 
+char MustHex[] = {
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 00-0f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 10-1f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 20-2f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, /* 30-3f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 40-4f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 50-5f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 60-6f */
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, /* 70-7f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 80-8f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 90-9f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* a0-af */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* b0-bf */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* c0-cf */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* d0-df */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* e0-ef */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};/* f0-ff */
+
+char ToHex[] = "0123456789abcdef";
 unsigned char trhex[] = {
     17, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 16, 16, 17, 16, 16, /* 00-0f */
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, /* 10-1f */
@@ -159,12 +190,14 @@ int get32(char *iline, char *dest) {
 }
 
 
+char *Lbuf;
+int64_t Lbufsize;
 
 void process(FILE *fi, char *fn) {
     char *in, *eol, *end;
     size_t readsize;
     int64_t cur,size, len, offset;
-    int64_t x, needshex, hexlen, llen;
+    int64_t x, needshex, hexlen, llen, ilen;
     int Ateof;
 
     if (!Cache || Cachesize == 0) {
@@ -227,34 +260,91 @@ again:
 	        hexlen = get32(&in[5],in);
 	    } else
 	        hexlen = llen;
-	    if(hexlen && fwrite(in,hexlen,1,stdout) != 1) {
+	    in[hexlen] = '\n';
+	    if (fwrite(in,hexlen+1,1,stdout) != 1) {
 		fprintf(stderr,"Write error.\n");
 		perror("stdout");
 		exit(1);
 	    }
-	    fputc('\n',stdout);
 	} else {
-	    for (needshex = x = 0; !needshex && x <llen; x++) {
-		needshex = in[x] <= ' '  || in[x] > 126;
-	    }
+	    for (needshex = x = 0; !needshex && x <llen; x++) 
+		needshex |= MustHex[(unsigned char)in[x]];
 	    if (needshex) {
-	        printf("$HEX[");
-		for (x=0; x < llen; x++)
-		   printf("%02x",in[x] & 0xff);
-		printf("]\n");
-	    } else {
-	        if (llen && fwrite(in,llen,1,stdout) != 1) {
-		    fprintf(stderr,"Write error.\n");
-		    perror("stdout");
-		    exit(1);
+                if (Lbufsize < (llen*2+7)) {
+                    if (!Lbuf) {
+                        Lbufsize = (llen*2+7) + CACHESIZE;
+                        Lbuf = malloc(Lbufsize);
+                        if (!Lbuf) {
+                            fprintf(stderr,"Could not allocate memory for local buffer\n");
+                            exit(1);
+                        }   
+                    } else {
+                        Lbuf = realloc(Lbuf,Lbufsize + (llen*2+7));
+                        if (!Lbuf) {
+                            fprintf(stderr,"Could not grow local buffer by %"PRIu64" bytes\n",(uint64_t)(llen)*2 + 7L);
+                            exit(1);
+                        }
+                        Lbufsize += (llen*2)+7;
+                    }
+                }
+		ilen = 5;
+		strcpy(Lbuf,"$HEX[");
+		for (x=0; x < llen; x++) {
+		   Lbuf[ilen++] = ToHex[(in[x] >>4)&0xf];
+		   Lbuf[ilen++] = ToHex[(in[x])&0xf];
 		}
-		fputc('\n',stdout);
+		Lbuf[ilen++] = ']';
+		llen = ilen; in = Lbuf;
+	    }
+	    in[llen] = '\n';
+	    if (fwrite(in,llen+1,1,stdout) != 1) {
+		fprintf(stderr,"Write error.\n");
+		perror("stdout");
+		exit(1);
 	    }
 	}
 	cur += len + 1;
 	in = &Cache[cur];
     }
 }
+
+void getval (char **i, int *val) {
+    char *v = *i;
+    if (!*v) return;
+    if (*v == '-' || *v == ',') v++;
+    if (*v == '0' && v[1] == 'x' && sscanf(v,"0x%x",val) == 1) {
+        if (*val < 0 || *val > 255) {
+            fprintf(stderr,"Hex value out of range at: %s\n",*i);
+	    exit(1);
+	}
+	v += 2;
+	while (*v) {
+	    if (*v == ',' || *v == '-') break;
+	    v++;
+	}
+	*i = v;
+	return;
+    }
+    if (isdigit(*v)) {
+        *val = atoi(v);
+	if (*val < 0 || *val > 255) {
+	    fprintf(stderr,"Invalid number at: %s\n",*i);
+	    exit(1);
+	}
+	while (*v && isdigit(*v)) {
+	    v++;
+	}
+	*i = v;
+	return;
+    }
+    *val = *v++;
+    if (*val < 0 || *val > 255) {
+	fprintf(stderr,"Invalid number at: %s\n",*i);
+	exit(1);
+    }
+    *i = v;
+}
+
 
 
 int main(int argc,char **argv) {
@@ -272,14 +362,35 @@ int main(int argc,char **argv) {
     Unhex = 0;
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "u")) != -1) {
+    while ((ch = getopt(argc, argv, "?huU:S:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "u",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?huU:S:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
+	    case 'S':
+	    case 'U':
+	        v = optarg;
+		while (*v) {
+		    int start,end;
+		    getval(&v,&start);
+		    end = start;
+		    if (*v == '-') getval(&v, &end);
+		    for (x=start; x <= end; x++)
+		       MustHex[x] = (ch =='S')? 1 : 0;
+		}
+		fprintf(stderr,"Will map characters to $HEX[] if a 1 in that character position");
+		for (x=0; x <256; x++) {
+		    if ((x%32) == 0) fprintf(stderr,"\n%02x-%02x:",x,x+31);
+		    fprintf(stderr,"%d",MustHex[x]);
+		}
+		fprintf(stderr,"\n");
+		break;
+	        
 	    case 'u':
 	        Unhex = 1;
 		break;
+	    case 'h':
+	    case '?':
 	    default:
 		v = Version;
 		while (*v++ != ' ')
@@ -287,6 +398,10 @@ int main(int argc,char **argv) {
 		while (*v++ !=' ')
 		    ;
 	        fprintf(stderr,"rehex Version %s\n\nrehex [-u] [file file...]\nIf no files supplied, reads from stdin.  Always writes to stdout\nIf stdin is used as a filename, the actual stdin will read\n",v);
+		fprintf(stderr,"\t-S exp\t\tSets $HEX[] conversion for char or range\n");
+		fprintf(stderr,"\t-U exp\t\tResets $HEX[] conversion for char or range\n");
+		fprintf(stderr,"\t\t\tSpecify a character like a,b,c, or a range like a-f,\n");
+		fprintf(stderr,"\t\t\t0x61-0x66 or as decimal values line 0-32.\n");
 		exit(1);
 	}
     }
