@@ -2424,6 +2424,7 @@ errexit:
 	    fprintf(stderr,"Bloom filter could not be allocated\nMake more memory available, or use -M option to reduce cache size from\nthe current %"PRIu64" bytes\n",MaxMem);
 	    exit(1);
 	}
+	fprintf(stderr,"          ");
 	while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
 	    numline = Linecount;
 	    for (curline = 0; curline < Linecount; curline += numline) {
@@ -2465,7 +2466,9 @@ errexit:
 		release(FreeWaiting);
 	    }
 	    Line += Linecount;
+	    fprintf(stderr,"%c%c%c%c%c%c%c%c%c%9"PRIu64,8,8,8,8,8,8,8,8,8,Line);fflush(stderr);
 	}
+	fprintf(stderr,"\n");
 	possess(FreeWaiting);
 	wait_for(FreeWaiting,TO_BE,Maxt);
 	release(FreeWaiting);
