@@ -111,9 +111,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.50 2020/07/31 20:48:33 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.51 2020/07/31 23:12:03 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.51  2020/07/31 23:12:03  dlr
+ * fix 0-length lines for -f
+ *
  * Revision 1.50  2020/07/31 20:48:33  dlr
  * Shard the database (-f) option.  BDB gets snarky with lots of entries.
  *
@@ -2120,10 +2123,12 @@ void dbfinalwrite(struct timespec *starttime, char **argv, FILE *fo) {
 		    exit(1);
 		}
 
-		if (fwrite(dbdata.data,dbdata.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
+
+		if (dbdata.size && fwrite(dbdata.data,dbdata.size,1,fo) != 1 ) {
 		    fprintf(stderr,"Write failed to output file.  Disk full?\n");
 		    exit(1);
 		}
+		fputc('\n',fo);
 		free(dbkey.data);
 		free(dbdata.data);
 		Write_global++;
@@ -2163,10 +2168,11 @@ void dbfinalwrite(struct timespec *starttime, char **argv, FILE *fo) {
 	    if (DoCommon && Commontest(*(uint64_t *)DBHeap[0].dbdata.data) == 0) {
 		goto nextitem;	
 	    }
-	    if (fwrite(DBHeap[0].dbkey.data,DBHeap[0].dbkey.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
+	    if (DBHeap[0].dbkey.data && fwrite(DBHeap[0].dbkey.data,DBHeap[0].dbkey.size,1,fo) != 1) {
 		fprintf(stderr,"Write failed to output file.  Disk full?\n");
 		exit(1);
 	    }
+	    fputc('\n',fo);
 	    Write_global++;
 nextitem:
 	    free(DBHeap[0].dbkey.data);
