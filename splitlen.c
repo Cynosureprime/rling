@@ -24,6 +24,8 @@
 #define MAXPATHLEN PATH_MAX
 #endif
 
+#define MAXBUF 100*1024*1024
+
 /*
  * splitlen allows you to split files by line length.
  * you can specify the position in the output file to place the line
@@ -40,10 +42,13 @@
  * If an output file exists, it is appended to.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.5 2020/07/31 02:36:55 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.6 2020/07/31 21:39:06 dlr Exp dlr $";
 
 /*
  * $Log: splitlen.c,v $
+ * Revision 1.6  2020/07/31 21:39:06  dlr
+ * Add -s option to offer single-file sorted-by-length output
+ *
  * Revision 1.5  2020/07/31 02:36:55  dlr
  * Add -S/-U to allow $HEX[] map forcing.
  *
@@ -204,6 +209,15 @@ int get32(char *iline, char *dest) {
   }
   return(cnt);
 }
+
+int comp1(const void *a, const void *b) {
+    struct OutCache *a1 = (struct OutCache *)a;
+    struct OutCache *b1 = (struct OutCache *)b;
+    if (a1->len < b1->len) return(-1);
+    if (a1->len > b1->len) return(1);
+    return(0);
+}
+
 
 void closesome(int some) {
     uint64_t x;
@@ -460,9 +474,12 @@ void getval (char **i, int *val) {
 }
 
 int main(int argc,char **argv) {
-    int ch,x;
-    FILE *fi;
+    int ch,x, dosort;
+    FILE *fi,*fo;
     char *v;
+    char *Buffer;
+    size_t size;
+    uint64_t MaxMem = MAXBUF, RC;
 #ifndef _AIX
     struct option longopt[] = {
 	{NULL,0,NULL,0}
@@ -473,13 +490,49 @@ int main(int argc,char **argv) {
     Cache = NULL;
     Cachesize = 0;
     Unhex = 0;
+    dosort = 0;
 
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?huo:c:S:U:")) != -1) {
+    while ((ch = getopt(argc, argv, "?huso:c:M:S:U:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?huo:c:S:U:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?huso:c:M:S:U:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
+            case 'M':
+                RC = atol(optarg);
+                if (strlen(optarg)) {
+                    ch = optarg[strlen(optarg)-1];
+                    switch (ch) {
+                        case 'k':
+                        case 'K':
+                            RC *= 1024L;
+                            break;
+                        case 'm': 
+                        case 'M': 
+                            RC *= 1024L*1024L;
+                            break;
+                        case 'G': 
+                        case 'g': 
+                            RC *= 1024L*1024L*1024L;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                if (RC <64*1024) {
+                    fprintf(stderr,"%"PRIu64" bytes isn't going to be very effective\nTry using more than 64k\n",RC);
+                }
+                fprintf(stderr,"Memory for cache set to %"PRIu64" bytes (was %"PRIu64")\n",RC,MaxMem);
+                MaxMem = RC;
+                Buffer = malloc(MaxMem);
+                if (!Buffer) {
+                    fprintf(stderr,"but allocation for that much failed.  Try using a smaller amount\n");
+                    exit(1);
+                }
+                free(Buffer);
+                break;
+
+
 	    case 'S':
 	    case 'U':
 	        v = optarg;
@@ -498,6 +551,11 @@ int main(int argc,char **argv) {
 		}
 		fprintf(stderr,"\n");
 		break;
+
+	    case 's':
+	        dosort = 1;
+		break;
+
 	    case 'c':
 	        OutLenId = optarg[0];
 		break;
@@ -585,11 +643,43 @@ setmode(0,O_BINARY);
 	fclose(fi);
     }
     closesome(0);
+    qsort(OutCache,OutCacheSize,sizeof(struct OutCache),comp1);
+    if (dosort) {
+        fo = fopen(OutName,"wb");
+	if (!fo) {
+	   fprintf(stderr,"Can't open output file to write sorted results\n");
+	   perror(OutName);
+	   exit(1);
+	}
+	Buffer = malloc(MaxMem);
+	if (!Buffer) {
+	    fprintf(stderr,"Could not allocate %"PRIu64" bytes for buffering\n",MaxMem);
+	    fprintf(stderr,"Try using -M 64k to allocate 64k\n");
+	    exit(1);
+	}
+    }
+
     for (x=0; x<OutCacheSize; x++) {
 	if (OutCache[x].state == ready) {
 	    fprintf(stderr,"Wrote %9"PRIu64" lines to %s\n",OutCache[x].lines,OutCache[x].OutName);
+	    if (dosort) {
+		fi = fopen(OutCache[x].OutName,"rb");
+		if (!fi) {
+		    fprintf(stderr,"Can't re-open \"%s\", skipping\n",OutCache[x].OutName);
+		    continue;
+		}
+		while ((size = fread(Buffer,1,MaxMem,fi)) > 0) {
+		    if(fwrite(Buffer,size,1,fo) != 1) {
+		         fprintf(stderr,"Write error. Disk full?\n");
+			 perror(OutName);
+		    }
+		}
+		fclose(fi);
+		unlink(OutCache[x].OutName);
+	    }
 	}
     }
+    if (dosort) fclose(fo);
     return(0);
 }
 

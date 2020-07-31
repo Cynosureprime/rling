@@ -111,9 +111,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.49 2020/07/30 23:01:44 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.50 2020/07/31 20:48:33 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.50  2020/07/31 20:48:33  dlr
+ * Shard the database (-f) option.  BDB gets snarky with lots of entries.
+ *
  * Revision 1.49  2020/07/30 23:01:44  dlr
  * Portability for clang
  *
@@ -367,6 +370,14 @@ uint64_t Currem_global,Unique_global,Write_global, Occ_global;
 uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
 int Maxt, Workthread;
+
+/* BDB seems to have a 1B entry limit */
+/* So, LINESPERDB is the default.  It's approximate, because of
+   the theading and the line cache. */
+#define LINESPERDB 250000000
+DB **DB_global;
+int DBsize_global, DBactive_global, DB_linesper = LINESPERDB;
+
 int _dowildcard = -1; /* enable wildcard expansion for Windows */
 
 #ifdef MAXPATHLEN
@@ -774,6 +785,7 @@ MDXALIGN void procjob(void *dummy) {
     uint64_t x, unique, occ, rem,thisnum, crc, index, j, RC, COM, thisend;
     int64_t llen, maxdepth, minlen, maxlen;
     int res, curline, numline, ch, delflag;
+    DB *thisdb;
     DBT dbkey, dbdata;
     size_t DBlen;
 
@@ -1150,7 +1162,25 @@ MDXALIGN void procjob(void *dummy) {
 		    key = &job->readbuf[job->readindex[curline].offset];
 		    ch = job->readindex[curline].len;
 		    crc = XXH3_64bits(key,ch);
-		    Bloomset((crc & BLOOMMASK));
+		    if (Bloom[(crc & BLOOMMASK)/64] & ((uint64_t)1L<<(crc & 0x3f))) {
+			dbkey.data = key;
+			dbkey.ulen = dbkey.size = ch;
+			dbdata.data = &j;
+			dbdata.ulen = sizeof(j);
+			res = 1;
+			for (x=0; x < DBactive_global; x++) {
+			    res =1;
+			    thisdb = DB_global[x];
+			    if (thisdb == job->db) continue;
+			    res = thisdb->get(thisdb,NULL,&dbkey,&dbdata,0);
+			    if (res == 0 && dbdata.size == sizeof(j)) break;
+			}
+			if (res == 0 && dbdata.size == sizeof(j)) {
+			    rem++;
+			    continue;
+			}
+		    } else 
+			Bloomset((crc & BLOOMMASK));
 		    dbkey.data = key;
 		    dbkey.size = ch;
 		    dbdata.data = &index;
@@ -1165,6 +1195,9 @@ MDXALIGN void procjob(void *dummy) {
 			}
 		    } else {
 			unique++;
+		    }
+	            if ((unique % 100000) ==0) {
+		        fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64" Unique %11"PRIu64" Dups",Unique_global+unique,Currem_global+rem);fflush(stderr);
 		    }
 		}
 		if (job->readbuf == Readbuf) {
@@ -1195,13 +1228,19 @@ MDXALIGN void procjob(void *dummy) {
 			dbdata.data = &index;
 			dbdata.ulen = sizeof(index);
 			dbdata.flags = DB_DBT_USERMEM;
-			res = job->db->get(job->db,NULL,&dbkey,&dbdata,0);
+			res = 1;
+			for (x=0; x < DBactive_global; x++) {
+			    thisdb = DB_global[x];
+			    res = thisdb->get(thisdb,NULL,&dbkey,&dbdata,0);
+			    if (res == 0 &&  dbdata.size == sizeof(index))
+			        break;
+			}
 			if (res == 0 &&  dbdata.size == sizeof(index)) {
 			    rem++;
 			    if (DoCommon) {
 				Commonset(*(uint64_t *)dbdata.data);
 			    } else {
-				res = job->db->del(job->db,NULL,&dbkey,0);
+				res = thisdb->del(thisdb,NULL,&dbkey,0);
 				if (res != 0) {
 				    fprintf(stderr,"DB Delete error\n%s\n",db_strerror(res));
 				    exit(1);
@@ -1939,6 +1978,222 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
     }
 }
 
+struct DBHeap {
+    DB *db;
+    DBC *dbcur;
+    DBT dbkey,dbdata;
+    int active;
+} *DBHeap;
+
+int DBheapcmp(const void *a, const void *b) {
+    struct DBHeap *a1 = (struct DBHeap *)a;
+    struct DBHeap *b1 = (struct DBHeap *)b;
+    size_t len;
+    int res;
+    if (a1->active==0 || b1->active==0){
+	if (a1->active == b1->active)
+	    return (0);
+        if (a1->active == 0) return(1);
+	return(-1);
+    }
+    len = a1->dbkey.size;
+    if (len > b1->dbkey.size)
+       len = b1->dbkey.size;
+    res = memcmp(a1->dbkey.data,b1->dbkey.data,len);
+    if (res < 0) return (-1);
+    if (res > 0) return (1);
+    if (a1->dbkey.size == b1->dbkey.size) return (0);
+    if (a1->dbkey.size < b1->dbkey.size) return (-1);
+    return(1);
+}
+
+void DBreheap(struct DBHeap *InH, int cnt)
+{
+    struct DBHeap tmp;
+    int child, parent;
+
+    parent = 0;
+    while ((child = (parent*2)+1) < cnt) {
+        if ((child+1) < cnt && DBheapcmp(&InH[child],&InH[child+1]) >0)
+            child++;
+        if (DBheapcmp(&InH[child],&InH[parent]) < 0) {
+            tmp = InH[child];InH[child]=InH[parent];InH[parent]=tmp;
+            parent = child;
+        } else break;
+    }
+}
+
+void dbfinalwrite(struct timespec *starttime, char **argv, FILE *fo) {
+    struct timespec curtime, inittime;
+    double wtime;
+    uint64_t x,count, work;
+    int dbindex;
+    DB *db, *dbo;
+    DBC *dbcur;
+    DBT dbkey, dbdata;
+    char DBNAME[MDXMAXPATHLEN*2],DBOUT[MDXMAXPATHLEN*2];
+
+    DBHeap = calloc(DBactive_global+1, sizeof(struct DBHeap));
+    if (!DBHeap) {
+        fprintf(stderr,"Could not create the heap for the database. Out of memory\n");
+	exit(1);
+    }
+
+    memset(&dbkey,0,sizeof(dbkey));
+    memset(&dbdata,0,sizeof(dbdata));
+    dbkey.flags = DB_DBT_MALLOC;
+    dbdata.flags = DB_DBT_MALLOC;
+    Write_global = 0;
+    if (SortOut == 0) {
+	fprintf(stderr,"Building final output:            "); fflush(stderr);
+	for (dbindex=0; dbindex < DBactive_global; dbindex++) {
+	    db = DB_global[dbindex];
+	    sprintf(DBOUT,"%s/%s%d.db",TempPath,"rlingo",getpid());
+	    if ((x = db_create(&dbo, NULL,0))) {
+		fprintf(stderr,"db_create: %s\n",db_strerror(x));
+		exit(1);
+	    }
+	    dbo->set_pagesize(dbo,32768);
+	    dbo->set_cachesize(dbo,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
+	    dbo->set_bt_compare(dbo,comp4);
+	    if ((x = dbo->open(dbo, NULL,DBOUT,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
+		fprintf(stderr,"Could not create database \"%s\"\n",DBOUT);
+		fprintf(stderr,"db_open: %s\n",db_strerror(x));
+		exit(1);
+	    }
+
+	    if ((x = db->cursor(db,NULL,&dbcur,0))) {
+		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    count = 0;
+	    while (1) {
+		if ((count % 100000) == 0) {
+		    fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64,count);fflush(stderr);
+		}
+		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+		count++;
+		if (x) {
+		    if (x == DB_NOTFOUND) break;
+		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+		if (DoCommon && dbdata.size == 8) {
+		    work = *(uint64_t *)dbdata.data;
+		    if (Commontest(work) == 0) {
+			free(dbkey.data);
+			free(dbdata.data);
+			continue;
+		    }
+		}
+		x = dbo->put(dbo,NULL,&dbdata,&dbkey,0);
+
+		if (x) {
+		    fprintf(stderr,"Can't write final database.  Disk full?\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+		free(dbkey.data);
+		free(dbdata.data);
+	    }
+	    current_utc_time(&curtime);
+	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+	    wtime -= (double) starttime->tv_sec + (double) (starttime->tv_nsec) / 1000000000.0;
+	    fprintf(stderr,"\nBuild final output %d took %.4f seconds\n",dbindex,wtime);
+	    current_utc_time(starttime);
+	    dbcur->c_close(dbcur);
+	    db->close(db,0);
+	    sprintf(DBNAME,"%s/%s%d-%d.db",TempPath,"rling",getpid(),dbindex);
+	    unlink(DBNAME);
+	    if ((x = dbo->cursor(dbo,NULL,&dbcur,0))) {
+		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    fprintf(stderr,"Writing %sto \"%s\"            ",(DoCommon)?"common lines ":"",argv[1]);
+	    while (1) {
+		if ((Write_global % 100000) == 0) { 
+		    fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64,Write_global);fflush(stderr);
+		}
+		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
+		if (x) {
+		    if (x == DB_NOTFOUND) break;
+		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+
+		if (fwrite(dbdata.data,dbdata.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
+		    fprintf(stderr,"Write failed to output file.  Disk full?\n");
+		    exit(1);
+		}
+		free(dbkey.data);
+		free(dbdata.data);
+		Write_global++;
+	    }
+	    fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64"\n",Write_global);fflush(stderr);
+	    dbcur->close(dbcur);
+	    dbo->close(dbo,0);
+	    unlink(DBOUT);
+	}
+    } else {
+	for (dbindex=0; dbindex < DBactive_global; dbindex++) {
+	    db = DB_global[dbindex];
+	    DBHeap[dbindex].db = db;
+	    memset(&DBHeap[dbindex].dbkey,0,sizeof(dbkey));
+	    memset(&DBHeap[dbindex].dbdata,0,sizeof(dbdata));
+	    DBHeap[dbindex].dbkey.flags = DB_DBT_MALLOC;
+	    DBHeap[dbindex].dbdata.flags = DB_DBT_MALLOC;
+	    if ((x = db->cursor(db,NULL,&DBHeap[dbindex].dbcur,0))) {
+		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    x = DBHeap[dbindex].dbcur->c_get(DBHeap[dbindex].dbcur,&DBHeap[dbindex].dbkey,&DBHeap[dbindex].dbdata,DB_NEXT);
+	    DBHeap[dbindex].active = 0;
+	    if (x) {
+		if (x == DB_NOTFOUND) continue;
+		fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		exit(1);
+	    }
+	    DBHeap[dbindex].active = 1;
+	}
+	qsort(DBHeap,DBactive_global,sizeof(struct DBHeap),DBheapcmp);
+	fprintf(stderr,"Writing %sto \"%s\"            ",(DoCommon)?"common lines ":"",argv[1]);
+	while (DBHeap[0].active) {
+	    if ((Write_global % 100000) == 0) { 
+		fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64,Write_global);fflush(stderr);
+	    }
+	    if (DoCommon && Commontest(*(uint64_t *)DBHeap[0].dbdata.data) == 0) {
+		goto nextitem;	
+	    }
+	    if (fwrite(DBHeap[0].dbkey.data,DBHeap[0].dbkey.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
+		fprintf(stderr,"Write failed to output file.  Disk full?\n");
+		exit(1);
+	    }
+	    Write_global++;
+nextitem:
+	    free(DBHeap[0].dbkey.data);
+	    free(DBHeap[0].dbdata.data);
+	    x = DBHeap[0].dbcur->c_get(DBHeap[0].dbcur,&DBHeap[0].dbkey,&DBHeap[0].dbdata,DB_NEXT);
+	    if (x) {
+		if (x == DB_NOTFOUND) {
+		   DBHeap[0].active = 0;
+		} else {
+		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
+		    exit(1);
+		}
+	    }
+	    DBreheap(DBHeap,DBactive_global);
+	}
+	fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64"\n",Write_global);
+	for (dbindex=0; dbindex < DBactive_global; dbindex++) {
+	    DBHeap[dbindex].dbcur->close(DBHeap[dbindex].dbcur);
+	    DBHeap[dbindex].db->close(DBHeap[dbindex].db,0);
+	}
+	for (dbindex=0; dbindex < DBactive_global; dbindex++) {
+	    sprintf(DBNAME,"%s/%s%d-%d.db",TempPath,"rling",getpid(),dbindex);
+	    unlink(DBNAME);
+	}
+    }
+    free(DBHeap);
+}
 
 
 /* The mainline code.  Yeah, it's ugly, dresses poorly, and smells funny.
@@ -1955,7 +2210,7 @@ int main(int argc, char **argv) {
     struct Linelist *cur, *next;
     int ch,  x, y, progress, Hidebit, last, DoDebug, forkelem, ProcMode;
     int ErrCheck;
-    int curline, numline, Linecount;
+    int curline, numline, Linecount, dbindex;
     char *readbuf;
     struct LineInfo *readindex;
     int Workthread, locoff;
@@ -1994,9 +2249,9 @@ int main(int argc, char **argv) {
     current_utc_time(&starttime);
     current_utc_time(&inittime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:T:M:")) != -1) {
+    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:T:M:L:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:T:M:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:T:M:L:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -2017,6 +2272,7 @@ errexit:
 		fprintf(stderr,"\t-p prime\tForce size of hash table\n");
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
 		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory)\n");
+		fprintf(stderr,"\t-L num\t\tApproximate maximum lines per database\n");
 		fprintf(stderr,"\t-2\t\tUse rli2 mode - all files must be sorted. Low mem usage.\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
 		fprintf(stderr,"\t-T path\t\tDirectory to store temp files in\n");
@@ -2037,6 +2293,14 @@ errexit:
 
 	    case 'f':
 		ProcMode = 2;
+		break;
+
+	    case 'L':
+	        DB_linesper = atoi(optarg);
+		if (DB_linesper > 999999999 || DB_linesper < 1000 ) {
+		    fprintf(stderr,"Lines per database should be >1000 and less than 1000000000\n");
+		    fprintf(stderr,"You set it to %d\n",DB_linesper);
+		}
 		break;
 
 	    case '2':
@@ -2142,8 +2406,15 @@ errexit:
     argc -= optind;
     argv += optind;
 
-    sprintf(DBNAME,"%s/%s%d.db",TempPath,"rling",getpid());
-    sprintf(DBOUT,"%s/%s%d.db",TempPath,"rlingo",getpid());
+    if (ProcMode == 2) {
+        DB_global = calloc(20,sizeof(DB *));
+	if (!DB_global) {
+	    fprintf(stderr,"Could not allocate memory for database\n");
+	    exit(1);
+	}
+	DBsize_global = 20;
+	DBactive_global = 0;
+    }
 
     if (ProcMode == 2 && (Dedupe == 0 )) {
 	if (Dedupe == 0) fprintf(stderr,"The -n switch cannot be used with -f\n");
@@ -2407,25 +2678,36 @@ errexit:
 		      (Line*sizeof(struct Linelist));
 	}
     } else {
-	if ((x = db_create(&db, NULL,0))) {
-	    fprintf(stderr,"db_create: %s\n",db_strerror(x));
-	    exit(1);
-	}
-	db->set_pagesize(db,32768);
-	db->set_cachesize(db,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
-	if ((x = db->open(db, NULL,DBNAME,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
-	    fprintf(stderr,"Could not create database \"%s\"\n",DBNAME);
-	    fprintf(stderr,"db_open: %s\n",db_strerror(x));
-	    exit(1);
-	}
-
 	Bloom = calloc(BLOOMSIZE/64 +8,1);
 	if (!Bloom) {
 	    fprintf(stderr,"Bloom filter could not be allocated\nMake more memory available, or use -M option to reduce cache size from\nthe current %"PRIu64" bytes\n",MaxMem);
 	    exit(1);
 	}
-	fprintf(stderr,"          ");
+	fprintf(stderr,"                                ");
 	while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
+
+	    if (((Line / DB_linesper)+1) != DBactive_global) {
+		if ((DBactive_global+1) > DBsize_global) {
+		    DB_global = realloc(DB_global,((DBsize_global*2)+1) * sizeof(DB *));
+		    if (!DB_global) {
+		        fprintf(stderr,"Could not get more memory for database\n");
+			exit(1);
+		    }
+		}
+		sprintf(DBNAME,"%s/%s%d-%d.db",TempPath,"rling",getpid(),DBactive_global);
+		if ((x = db_create(&db, NULL,0))) {
+		    fprintf(stderr,"db_create: %s\n",db_strerror(x));
+		    exit(1);
+		}
+		db->set_pagesize(db,32768);
+		db->set_cachesize(db,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
+		if ((x = db->open(db, NULL,DBNAME,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
+		    fprintf(stderr,"Could not create database \"%s\"\n",DBNAME);
+		    fprintf(stderr,"db_open: %s\n",db_strerror(x));
+		    exit(1);
+		}
+		DB_global[DBactive_global++] = db;
+	    }
 	    numline = Linecount;
 	    for (curline = 0; curline < Linecount; curline += numline) {
 		possess(FreeWaiting);
@@ -2466,7 +2748,6 @@ errexit:
 		release(FreeWaiting);
 	    }
 	    Line += Linecount;
-	    fprintf(stderr,"%c%c%c%c%c%c%c%c%c%9"PRIu64,8,8,8,8,8,8,8,8,8,Line);fflush(stderr);
 	}
 	fprintf(stderr,"\n");
 	possess(FreeWaiting);
@@ -2781,119 +3062,7 @@ errexit:
     }
     Currem = 0;
     if (ProcMode == 2) {
-
-	memset(&dbkey,0,sizeof(dbkey));
-	memset(&dbdata,0,sizeof(dbdata));
-	dbkey.flags = DB_DBT_MALLOC;
-	dbdata.flags = DB_DBT_MALLOC;
-	if (SortOut == 0) {
-	    if ((x = db_create(&dbo, NULL,0))) {
-		fprintf(stderr,"db_create: %s\n",db_strerror(x));
-		exit(1);
-	    }
-	    dbo->set_pagesize(dbo,32768);
-	    dbo->set_cachesize(dbo,MaxMem/(uint64_t)2048L*1024L*1024L*1024L,MaxMem%(uint64_t)2048L*1024L*1024L*1024L,1);
-	    dbo->set_bt_compare(dbo,comp4);
-	    if ((x = dbo->open(dbo, NULL,DBOUT,NULL,DB_BTREE,DB_CREATE|DB_THREAD ,0664))) {
-		fprintf(stderr,"Could not create database \"%s\"\n",DBOUT);
-		fprintf(stderr,"db_open: %s\n",db_strerror(x));
-		exit(1);
-	    }
-
-	    if ((x = db->cursor(db,NULL,&dbcur,0))) {
-		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
-		exit(1);
-	    }
-	    fprintf(stderr,"Building final output\n");
-	    while (1) {
-		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
-		if (x) {
-		    if (x == DB_NOTFOUND) break;
-		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
-		    exit(1);
-		}
-		if (DoCommon && dbdata.size == 8) {
-		    work = *(uint64_t *)dbdata.data;
-		    if (Commontest(work) == 0) {
-			free(dbkey.data);
-			free(dbdata.data);
-			continue;
-		    }
-		}
-		x = dbo->put(dbo,NULL,&dbdata,&dbkey,0);
-
-		if (x) {
-		    fprintf(stderr,"Can't write final database.  Disk full?\n%s\n",db_strerror(x));
-		    exit(1);
-		}
-		free(dbkey.data);
-		free(dbdata.data);
-	    }
-	    current_utc_time(&curtime);
-	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
-	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	    fprintf(stderr,"Build final output took %.4f seconds\n",wtime);
-	    current_utc_time(&starttime);
-	    dbcur->c_close(dbcur);
-	    db->close(db,0);
-	    unlink(DBNAME);
-	    if ((x = dbo->cursor(dbo,NULL,&dbcur,0))) {
-		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
-		exit(1);
-	    }
-	    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	    Write_global = 0;
-	    while (1) {
-		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
-		if (x) {
-		    if (x == DB_NOTFOUND) break;
-		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
-		    exit(1);
-		}
-
-		if (fwrite(dbdata.data,dbdata.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
-		    fprintf(stderr,"Write failed to output file.  Disk full?\n");
-		    exit(1);
-		}
-		free(dbkey.data);
-		free(dbdata.data);
-		Write_global++;
-	    }
-	    dbcur->close(dbcur);
-	    dbo->close(dbo,0);
-	    unlink(DBOUT);
-	} else {
-	    if ((x = db->cursor(db,NULL,&dbcur,0))) {
-		fprintf(stderr,"Database corrupt - cannot get cursor\n%s\n",db_strerror(x));
-		exit(1);
-	    }
-	    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	    Write_global = 0;
-	    while (1) {
-		x = dbcur->c_get(dbcur,&dbkey,&dbdata,DB_NEXT);
-		if (x) {
-		    if (x == DB_NOTFOUND) break;
-		    fprintf(stderr,"Database corrupt on cursor read\n%s\n",db_strerror(x));
-		    exit(1);
-		}
-		if (DoCommon && Commontest(*(uint64_t *)dbdata.data) == 0) {
-		    free(dbkey.data);
-		    free(dbdata.data);
-		    continue;
-		}
-		if (fwrite(dbkey.data,dbkey.size,1,fo) != 1 || fputc('\n',fo) == EOF) {
-		    fprintf(stderr,"Write failed to output file.  Disk full?\n");
-		    exit(1);
-		}
-		Write_global++;
-		free(dbkey.data);
-		free(dbdata.data);
-	    }
-	    dbcur->close(dbcur);
-	    db->close(db,0);
-	    unlink(DBNAME);
-	}
-
+       dbfinalwrite(&starttime,argv,fo);
     } else {
 	if (ProcMode == 4) {
 	    fprintf(stderr,"Input file had %s lines, with lengths from %"PRIu64" to %"PRIu64"\n",commify(Line),Minlen_global,Maxlen_global);
