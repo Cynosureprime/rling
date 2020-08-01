@@ -111,9 +111,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.52 2020/08/01 03:30:47 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.53 2020/08/01 14:07:55 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.53  2020/08/01 14:07:55  dlr
+ * Better handle lines > 25megabytes in length for -f and remove modes
+ *
  * Revision 1.52  2020/08/01 03:30:47  dlr
  * Last fix for 0-length lines.
  *
@@ -1416,9 +1419,18 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 	Lastcnt = 0;
 	Lastleft = NULL;
     }
-    curcnt += fread(curpos,1,(MAXCHUNK/2)-curcnt-1,fi);
-    curpos = readbuf;
     curindex = 0;
+    x = 0;
+    while (!feof(fi)) {
+	x = fread(curpos,1,(MAXCHUNK/2)-curcnt-1,fi);
+	if (x >0) {
+	    f = findeol(curpos,x-1);
+	    if (f) break;
+	} else 
+	   x = 0;
+    }
+    curpos = readbuf;
+    curcnt += x;
 
     while (curindex < curcnt) {
 	readindex[Linecount].offset = curindex;
