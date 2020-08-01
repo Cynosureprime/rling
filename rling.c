@@ -111,9 +111,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.51 2020/07/31 23:12:03 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.52 2020/08/01 03:30:47 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.52  2020/08/01 03:30:47  dlr
+ * Last fix for 0-length lines.
+ *
  * Revision 1.51  2020/07/31 23:12:03  dlr
  * fix 0-length lines for -f
  *
@@ -2165,10 +2168,12 @@ void dbfinalwrite(struct timespec *starttime, char **argv, FILE *fo) {
 	    if ((Write_global % 100000) == 0) { 
 		fprintf(stderr,"\010\010\010\010\010\010\010\010\010\010\010%11"PRIu64,Write_global);fflush(stderr);
 	    }
-	    if (DoCommon && Commontest(*(uint64_t *)DBHeap[0].dbdata.data) == 0) {
-		goto nextitem;	
+	    if (DoCommon && DBHeap[0].dbdata.size ==8) {
+		work = *(uint64_t *)DBHeap[0].dbdata.data;
+		if (Commontest(work) == 0) 
+		    goto nextitem;	
 	    }
-	    if (DBHeap[0].dbkey.data && fwrite(DBHeap[0].dbkey.data,DBHeap[0].dbkey.size,1,fo) != 1) {
+	    if (DBHeap[0].dbkey.size && fwrite(DBHeap[0].dbkey.data,DBHeap[0].dbkey.size,1,fo) != 1) {
 		fprintf(stderr,"Write failed to output file.  Disk full?\n");
 		exit(1);
 	    }
