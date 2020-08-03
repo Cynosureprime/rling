@@ -1,6 +1,7 @@
 #define _LARGEFILE64_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include <unistd.h>
+#include <sys/uio.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -111,11 +112,16 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.54 2020/08/03 14:28:17 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.55 2020/08/03 19:32:52 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
- * Revision 1.54  2020/08/03 14:28:17  dlr
- * Fix for last line in remove file not containing line terminator, found by Farid
+ * Revision 1.55  2020/08/03 19:32:52  dlr
+ * Improve write performance of rling for -s and -c.  This was a two-phase 
+ * approach: split the load between the cores, and use writev to take 
+ * advantage of "vectorized" gather capabilities of modern systems.  This
+ * more than doubles the speed, going from 112 seconds to 47 seconds to
+ * write a billion lines (10 gigabytes).  Still not as fast as the 34 seconds
+ * of the linear writes afforded by the default (input file order) but not bad.
  *
  * Revision 1.53  2020/08/01 14:07:55  dlr
  * Better handle lines > 25megabytes in length for -f and remove modes
@@ -296,6 +302,8 @@ extern void qsort_mt();
 /* Maximume line length now 4gigabytes */
 #define LINELIMIT 100000
 #define MEMCHUNK (1024*1000+16)
+/* Writemax is the maximum value that writev can handle */
+#define WRITEMAX 2147483647
 
 /* Bloom filter size in bits */
 #define BLOOMSIZE (1LL << 30)
@@ -346,6 +354,12 @@ struct InHeap {
     struct Infiles *In;
 };
 
+#ifdef IOVEC_MISSING
+struct iovec {
+   char   *iov_base;  /* Base address. */
+   size_t iov_len;    /* Length. */
+};
+#endif
 struct JOB {
     struct JOB *next;
     uint64_t start,end;
@@ -354,8 +368,9 @@ struct JOB {
     DB *db;
     struct WorkUnit *wu;
     struct LineInfo *readindex;
+    struct iovec *writeindex;
     FILE *fo;
-    int func;
+    int writesize,func;
 } *Jobs;
 
 
@@ -796,7 +811,7 @@ MDXALIGN void procjob(void *dummy) {
     char **sorted, *key, *newline, *eol;
     uint64_t x, unique, occ, rem,thisnum, crc, index, j, RC, COM, thisend;
     int64_t llen, maxdepth, minlen, maxlen;
-    int res, curline, numline, ch, delflag;
+    int res, curline, numline, ch, delflag, outcount;
     DB *thisdb;
     DBT dbkey, dbdata;
     size_t DBlen;
@@ -1107,9 +1122,9 @@ MDXALIGN void procjob(void *dummy) {
 		unique = 0;
 		thisend = (uint64_t)Fileend;
 		if (DoCommon || SortOut) {
-		    possess(Common_lock);
-		    wait_for(Common_lock, TO_BE, job->startline);
-		    for (index = job->start; index < job->end; index++) {
+		    uint64_t twrite;
+		    twrite = 0;
+		    for (outcount=0,index = job->start; index < job->end; index++) {
 			RC = (uint64_t)Sortlist[index];
 		        if (DoCommon) {
 			    RC &= 0x7fffffffffffffffL;
@@ -1123,11 +1138,73 @@ MDXALIGN void procjob(void *dummy) {
 			eol = findeol(key,thisend-RC);
 			if (!eol) eol = (char *)thisend;
 			llen = eol-key;
-			if (fwrite(key,llen+1,1,job->fo) != 1) {
-			    fprintf(stderr,"Write error. Disk full?");
-			    perror(job->fn);
-			    exit(1);
+			if ((twrite + llen +1) > WRITEMAX || outcount >= job->writesize) {
+			    int windex;
+			    possess(Common_lock);
+			    wait_for(Common_lock, TO_BE,job->startline);
+#ifdef UIO_MAXIOV
+			    for (windex =0; outcount > 0; ) {
+				res = (outcount > UIO_MAXIOV) ? UIO_MAXIOV:outcount;
+				if (writev(fileno(job->fo),&job->writeindex[windex],res) == 1) {
+				    fprintf(stderr,"Write error. Disk full?\n");
+				    perror(job->fn);
+				    exit(1);
+				}
+				outcount -= res;
+				windex += res;
+			    }
+#else
+			    for (windex=0; windex < outcount; windex++) {
+				if (fwrite(job->writeindex[windex].iov_base,job->writeindex[windex].iov_len,1,job->fo) != 1) {
+				    fprintf(stderr,"Write error. Disk full?\n");
+				    perror(job->fn);
+				    exit(1);
+				}
+			    }
+#endif
+			    release(Common_lock);
+			    outcount = 0;
+			    twrite = 0;
 			}
+			if ((llen +1) >= WRITEMAX) {
+			    possess(Common_lock);
+			    wait_for(Common_lock, TO_BE,job->startline);
+			    if (fwrite(key,llen+1,1,job->fo) != 1) {
+				fprintf(stderr,"Write error. Disk full?\n");
+				perror(job->fn);
+				exit(1);
+			    }
+			    release(Common_lock);
+			} else {
+			    job->writeindex[outcount].iov_base = key;
+			    job->writeindex[outcount++].iov_len = llen+1;
+			    twrite += llen+1;
+			}
+		    }
+		    possess(Common_lock);
+		    wait_for(Common_lock, TO_BE,job->startline);
+		    if (outcount) {
+			int windex;
+#ifdef UIO_MAXIOV
+			for (windex =0; outcount > 0; ) {
+			    res = (outcount > UIO_MAXIOV) ? UIO_MAXIOV:outcount;
+			    if (writev(fileno(job->fo),&job->writeindex[windex],res) == 1) {
+				fprintf(stderr,"Write error. Disk full?\n");
+				perror(job->fn);
+				exit(1);
+			    }
+			    outcount -= res;
+			    windex += res;
+			}
+#else
+			for (windex=0; windex < outcount; windex++) {
+			    if (fwrite(job->writeindex[windex].iov_base,job->writeindex[windex].iov_len,1,job->fo) != 1) {
+				fprintf(stderr,"Write error. Disk full?\n");
+				perror(job->fn);
+				exit(1);
+			    }
+			}
+#endif
 		    }
 		} else {
 		    for (index=job->start;index < job->end; index++) {
@@ -2482,7 +2559,8 @@ errexit:
     FreeTail = &FreeHead;
     WUTail = &WUHead;
     last = ((MAXCHUNK)/Maxt)/sizeof(char *);
-    if (last < 16) {
+    y = ((MAXCHUNK)/Maxt)/sizeof(struct iovec);
+    if (last < 16 || y < 16) {
 	fprintf(stderr,"MAXCHUNK is set too low - please fix\n");
 	exit(1);
     }
@@ -2490,6 +2568,8 @@ errexit:
     for (work=0,x=0; x<Maxt; x++) {
 	*FreeTail = &Jobs[x];
 	FreeTail = &(Jobs[x].next);
+	Jobs[x].writeindex = (struct iovec *)&Readbuf[(x*sizeof(struct iovec))*y];
+	Jobs[x].writesize = y;
 	WUList[x].Sortlist = (char **)&Readbuf[(x*sizeof(char*))*last];
 	WUList[x].ssize = last;
  	WUList[x].wulock = new_lock(0);
@@ -3094,7 +3174,10 @@ errexit:
 	    writeanal(fo,argv[1],qopts,Line);
 	} else {
 	    fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	    work = Line / Maxt;
+	    if (DoCommon || SortOut)
+	        work = Jobs[0].writesize;
+	    else
+		work = Line / Maxt;
 	    if (work < Maxt) work = Line;
 	    curline = 1;
 	    possess(Common_lock);
