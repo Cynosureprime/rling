@@ -111,9 +111,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.53 2020/08/01 14:07:55 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.54 2020/08/03 14:28:17 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.54  2020/08/03 14:28:17  dlr
+ * Fix for last line in remove file not containing line terminator, found by Farid
+ *
  * Revision 1.53  2020/08/01 14:07:55  dlr
  * Better handle lines > 25megabytes in length for -f and remove modes
  *
@@ -1008,7 +1011,7 @@ MDXALIGN void procjob(void *dummy) {
 			}
 			key = Sortlist[index];
 			eol = findeol(key,Fileend-key);
-			if (!eol) eol = key;
+			if (!eol) eol = Fileend;
 			llen = eol - key;
 			crc =  XXH3_64bits(key,llen);
 			j = crc & HashMask;
@@ -1055,7 +1058,7 @@ MDXALIGN void procjob(void *dummy) {
 			}
 			key = (char *)((uint64_t)Sortlist[index] & 0x7fffffffffffffffL);
 			eol = findeol(key,Fileend-key);
-			if (!eol) eol = key;
+			if (!eol) eol = Fileend;
 			llen = eol - key;
 			crc =  XXH3_64bits(key,llen);
 			j = crc % HashPrime;
@@ -1285,8 +1288,7 @@ MDXALIGN void procjob(void *dummy) {
 			Freq[thisnum].key = key;
 			Freq[thisnum].count = j;
 			eol = findeol(key,Fileend - key);
-			if (!eol)
-			    eol = Fileend;
+			if (!eol) eol = Fileend;
 			llen = eol - key;
 			Freq[thisnum++].len = llen;
 			if (Histogram) __sync_fetch_and_add(&Histogram[llen],1);
@@ -1452,7 +1454,6 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 	    if (feof(fi)) {
 	        curpos[curcnt] = '\n';
 		rlen = len = (curcnt - curindex);
-		if (len > 1) rlen--;
 		if (rlen < 0) rlen = 0;
 		if (rlen > 0 && curpos[curindex+rlen-1] == '\n') rlen--;
 		if (rlen > 0 && curpos[curindex+rlen-1] == '\r') rlen--;
