@@ -112,9 +112,18 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.55 2020/08/03 19:32:52 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.59 2020/08/04 03:52:31 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.59  2020/08/04 03:52:31  dlr
+ * Minor fix - lines (not files) > 2gigabytes handled better now.
+ *
+ * Revision 1.58  2020/08/03 23:37:22  dlr
+ * Add back Log comments
+ *
+ * Revision 1.57  2020/08/03 22:57:12  dlr
+ * Better support for writev on Windows
+ *
  * Revision 1.55  2020/08/03 19:32:52  dlr
  * Improve write performance of rling for -s and -c.  This was a two-phase 
  * approach: split the load between the cores, and use writev to take 
@@ -122,6 +131,9 @@ extern int optreset;
  * more than doubles the speed, going from 112 seconds to 47 seconds to
  * write a billion lines (10 gigabytes).  Still not as fast as the 34 seconds
  * of the linear writes afforded by the default (input file order) but not bad.
+ *
+ * Revision 1.54  2020/08/03 14:28:17  dlr
+ * Fix for last line in remove file not containing line terminator, found by Farid
  *
  * Revision 1.53  2020/08/01 14:07:55  dlr
  * Better handle lines > 25megabytes in length for -f and remove modes
@@ -353,6 +365,12 @@ struct Infiles {
 struct InHeap {
     struct Infiles *In;
 };
+
+#ifdef __MSYS__
+#ifndef UIO_MAXIOV 
+#define UIO_MAXIOV 1024
+#endif
+#endif
 
 #ifdef IOVEC_MISSING
 struct iovec {
@@ -1169,11 +1187,13 @@ MDXALIGN void procjob(void *dummy) {
 			if ((llen +1) >= WRITEMAX) {
 			    possess(Common_lock);
 			    wait_for(Common_lock, TO_BE,job->startline);
+			    fflush(job->fo);
 			    if (fwrite(key,llen+1,1,job->fo) != 1) {
 				fprintf(stderr,"Write error. Disk full?\n");
 				perror(job->fn);
 				exit(1);
 			    }
+			    fflush(job->fo);
 			    release(Common_lock);
 			} else {
 			    job->writeindex[outcount].iov_base = key;
