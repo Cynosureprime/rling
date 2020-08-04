@@ -20,12 +20,12 @@ The performance of rling is impressive (this done on a Power8 system with 80 cor
 
 | Program | Input    |  Remove | Memory | Time |
 | ------- | -------- | ------- | ------ | ---- |
-| rli | 1billion.txt | rem | 59.7g | 12:37 |
-| rli | 1billion.txt | 1billion.txt | 59.7g | 22:14 |
-| rling | 1billion.txt | rem | 38.0g | 0:22 |
-| rling | 1billion.txt | 1billion.txt | 38.0g | 1:15 |
-| rling -b | 1billion.txt | rem | 17.0g | 0:55 |
-| rling -b | 1billion.txt | 1billion.txt | 17.0g | 1.36 |
+| rli | 1billion.txt | rem | 59.7g | 12m37s |
+| rli | 1billion.txt | 1billion.txt | 59.7g | 22m14s |
+| rling | 1billion.txt | rem | 38.0g | 22s |
+| rling | 1billion.txt | 1billion.txt | 38.0g | 1m15s |
+| rling -b | 1billion.txt | rem | 17.0g | 55s |
+| rling -b | 1billion.txt | 1billion.txt | 17.0g | 1m36s |
 
 
 ## Technologies
