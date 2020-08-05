@@ -112,9 +112,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.59 2020/08/04 03:52:31 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.60 2020/08/05 15:50:06 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.60  2020/08/05 15:50:06  dlr
+ * Add -D to allow duplicates in the input file to be written to a separate file
+ *
  * Revision 1.59  2020/08/04 03:52:31  dlr
  * Minor fix - lines (not files) > 2gigabytes handled better now.
  *
@@ -409,7 +412,10 @@ struct WorkUnit *WUHead, **WUTail;
 
 lock *FreeWaiting,*WorkWaiting, *WUWaiting;
 lock *Currem_lock, *ReadBuf0, *ReadBuf1;
-lock *Common_lock;
+lock *Common_lock, *Dupe_lock;
+
+FILE *Dupe_fo;
+char *Dupe_fn;
 
 uint64_t Currem_global,Unique_global,Write_global, Occ_global;
 uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
@@ -604,6 +610,31 @@ inline char *findeol(char *s, int64_t l) {
 }
 #endif
 
+/*
+ * Write_dupe(pointer to line, max line length)
+ * Write_dupe appends the current line to the Dupe_fo file, which is opened in
+ * response to a -D command line option.  This is called when a duplicate line is
+ * detected.  Because any number of threads may attempt to call, this locks
+ * prior to writing.
+ */
+
+void Write_dupe(char *line, uint64_t len) {
+    char *eol;
+    uint64_t llen;
+
+    if (!Dupe_fo || !Dedupe) return;
+    eol = findeol(line,len);
+    if (!eol) eol = &line[len];
+    llen = (eol-line)+1;
+    possess(Dupe_lock);
+    if (fwrite(line,llen,1,Dupe_fo) != 1) {
+        fprintf(stderr,"Writing duplicates file failed.  Disk full?\n");
+	perror(Dupe_fn);
+	exit(1);
+    }
+    release(Dupe_lock);
+}
+    
 /* get_nprocs
  *
  * Returns the available number of threads that this program has access to
@@ -919,6 +950,7 @@ MDXALIGN void procjob(void *dummy) {
 		for (index=job->start+1; index < job->end; index++) {
 		    if (mystrcmp(key,Sortlist[index]) == 0) {
 			rem++;
+			Write_dupe(Sortlist[index],Fileend - Sortlist[index]);
 			MarkDeleted(index);
 		    } else {
 			unique++;
@@ -1060,6 +1092,7 @@ MDXALIGN void procjob(void *dummy) {
 				res = comp2(key,&Sortlist[cur - Linel]);
 				if (res == 0) {
 				    delflag = 1;
+				    Write_dupe(key,llen);
 				    MarkDeleted(index);
 				    rem++;
 				    break;
@@ -1107,6 +1140,7 @@ MDXALIGN void procjob(void *dummy) {
 				res = comp2(key,&Sortlist[cur - Linel]);
 				if (res == 0) {
 				    delflag = 1;
+				    Write_dupe(key,llen);
 				    MarkDeleted(index);
 				    rem++;
 				    break;
@@ -1711,9 +1745,10 @@ void getnextline(struct Infiles *infile) {
 		fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
 		exit(1);
 	    }
-	    if (res ==0)
+	    if (res ==0) {
 		infile->dup++;
-	    else
+		Write_dupe(infile->curline, infile->curlen);
+	    } else
 		infile->unique++;
 	    if (Dedupe == 0 || res != 0) return;
 	}
@@ -2356,8 +2391,10 @@ int main(int argc, char **argv) {
 
     qopts = NULL;
     MaxMem = MAXCHUNK;
+    Dupe_fo = NULL;
     strcpy(TempPath,".");
     ErrCheck = 1;
+    Dedupe = 1;
     DoDebug = 0;
     SortOut = 0;
     Maxdepth_global = 0;
@@ -2370,9 +2407,9 @@ int main(int argc, char **argv) {
     current_utc_time(&starttime);
     current_utc_time(&inittime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:T:M:L:")) != -1) {
+    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:D:T:M:L:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:T:M:L:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:D:T:M:L:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -2386,6 +2423,7 @@ errexit:
 		fprintf(stderr,"rling input output [remfil1 remfile2 ...]\n\n");
 		fprintf(stderr,"\t-i\t\tIgnore any error/missing files on remove list\n");
 		fprintf(stderr,"\t-d\t\tRemoves duplicate lines from input (on by default)\n");
+		fprintf(stderr,"\t-D file\t\tWrite duplicates to file\n");
 		fprintf(stderr,"\t-n\t\tDo not remove duplicate lines from input\n");
 		fprintf(stderr,"\t-c\t\tOutput lines common to input and remove files\n");
 		fprintf(stderr,"\t-s\t\tSort output. Default is input order.\n\t\t\tThis will make the -b and -f options substantially faster\n");
@@ -2502,6 +2540,16 @@ errexit:
 		break;
 
 
+	    case 'D':
+	        Dupe_fo = fopen(optarg,"wb");
+		if (!Dupe_fo) {
+		    fprintf(stderr,"Could not open output file for duplicate lines\n");
+		    perror(optarg);
+		    exit(1);
+		}
+		Dupe_fn = strdup(optarg);
+		break;
+
 	    case 'T':
 	        if (strlen(optarg) > MDXMAXPATHLEN) {
 		    fprintf(stderr,"The path is too long - make it shorter.\n");
@@ -2570,7 +2618,8 @@ errexit:
     Common_lock = new_lock(0);
     ReadBuf0 = new_lock(0);
     ReadBuf1 = new_lock(0);
-    if (!Readbuf || !Readindex || !WUList || !Jobs || !FreeWaiting || !WorkWaiting || !WUWaiting || !Currem_lock || !ReadBuf0 || !ReadBuf1 || !Common_lock) {
+    Dupe_lock = new_lock(0);
+    if (!Readbuf || !Readindex || !WUList || !Jobs || !FreeWaiting || !WorkWaiting || !WUWaiting || !Currem_lock || !ReadBuf0 || !ReadBuf1 || !Common_lock || !Dupe_lock) {
 	fprintf(stderr,"Can't allocate space for jobs\n");
 	fprintf(stderr,"This means that you don't have enough memory available to even\nstart processing.  Please make more memory available.\n");
 	exit(1);
@@ -3241,6 +3290,7 @@ errexit:
     fprintf(stderr,"\nWrote %s lines in %.4f seconds\n",commify(Write_global),wtime);
 
 finalexit:
+    if (Dupe_fo) fclose(Dupe_fo);
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) inittime.tv_sec + (double) (inittime.tv_nsec) / 1000000000.0;
