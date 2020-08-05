@@ -1,3 +1,5 @@
+![rling logo](/img/rling_256.png)
+
 # rling - a better rli
 > rling is similar to the rli utility found in [hashcat-utils](https://github.com/hashcat/hashcat-utils), but much, much faster
 
