@@ -112,9 +112,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.60 2020/08/05 15:50:06 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.61 2020/08/10 02:40:24 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.61  2020/08/10 02:40:24  dlr
+ * Add check to see if remove file is the input file - trivial check, so you can force i
+ * it by including a trivial path, etc.
+ *
  * Revision 1.60  2020/08/05 15:50:06  dlr
  * Add -D to allow duplicates in the input file to be written to a separate file
  *
@@ -1892,6 +1896,10 @@ void rli2(int argc, char **argv) {
 	    if (eol > Infile[x].curline && eol[-1] == '\r') {
 		eol[-1] = '\n'; Infile[x].curlen--;
 	    }
+	    if (x > 1 && strcmp(argv[0],argv[x]) == 0) {
+	        fprintf(stderr,"Skipping \"%s\" because it is the same as the input file\n",argv[x]);
+		Infile[x].eof = 1;
+	    }
 	    if (Infile[x].curlen == 0)
 		Infile[x].eof = 1;
 	    Infile[x].unique = Infile[x].line = 1;
@@ -3099,6 +3107,10 @@ errexit:
     Totrem = 0;
     for (x=2; x < argc; x++) {
 	Currem_global = 0;
+	if (strcmp(argv[0],argv[x]) == 0) {
+	    fprintf(stderr,"Skipping \"%s\" because it is the same as the input file\n",argv[x]);
+	    continue;
+	}
 	if (ProcMode == 4)
 	    fprintf(stderr,"Comparing from \"%s\"... ",argv[x]);
 	else
