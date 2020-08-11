@@ -36,7 +36,7 @@
  *
  * rling uses two (selectable) methods for this:  Hash, and binary search.
  *
- * Hash is the default mode, and ususally the fastest.  In this mode, each
+ * Hash is the default mode, and usually the fastest.  In this mode, each
  * line is read and the XXHASH64 value is computed, and stored in a hash
  * table.  Duplicates are removed as the input file is processed.  The
  * hash table is automatically sized to the input data, but this can be
@@ -111,12 +111,12 @@ extern int optreset;
  *
  * Revision 1.62  2020/08/11 05:32:41  dlr
  * Remove external database, and create my own "virtual memory" for processing large files.
- * This uses mmap to "read" the input file, and to create a temp file for the large 
+ * This uses mmap to "read" the input file, and to create a temp file for the large
  * internal Sortlist array.  Also, if the input file is not a regular file (if you are
  * using stdin or reading from a named pipe), a staging file is created automatically.
  *
- * This removes the liminations of memory size.  Yes, it is not as fast as reading
- * into real memory, and very large files will still make your disk work very hard, 
+ * This removes the limitations of memory size.  Yes, it is not as fast as reading
+ * into real memory, and very large files will still make your disk work very hard,
  * but it should make those with smaller memory systems very happy.  Use the -f
  * mode as before to keep the standard order, or -fs for a faster output, by sorting
  * the final file (yes, sorted output is faster than non-sorted).
@@ -138,8 +138,8 @@ extern int optreset;
  * Better support for writev on Windows
  *
  * Revision 1.55  2020/08/03 19:32:52  dlr
- * Improve write performance of rling for -s and -c.  This was a two-phase 
- * approach: split the load between the cores, and use writev to take 
+ * Improve write performance of rling for -s and -c.  This was a two-phase
+ * approach: split the load between the cores, and use writev to take
  * advantage of "vectorized" gather capabilities of modern systems.  This
  * more than doubles the speed, going from 112 seconds to 47 seconds to
  * write a billion lines (10 gigabytes).  Still not as fast as the 34 seconds
@@ -376,7 +376,7 @@ struct InHeap {
 };
 
 #ifdef __MSYS__
-#ifndef UIO_MAXIOV 
+#ifndef UIO_MAXIOV
 #define UIO_MAXIOV 1024
 #endif
 #endif
@@ -499,7 +499,7 @@ uint64_t *Common, *Bloom;
  * MarkD(pointer to char*, 64 bit value)
  * MarkD marks a particular entry in the Sortlist array as being a "deleted"
  * line, by setting the most significant bit of the address.  This is not
- * portable, but saves memory.  The valididity of the use of this bit is
+ * portable, but saves memory.  The validity of the use of this bit is
  * tested for in main, by checking the range of memory used to store the
  * file read in.
  */
@@ -631,7 +631,7 @@ void Write_dupe(char *line, uint64_t len) {
     }
     release(Dupe_lock);
 }
-    
+
 /* get_nprocs
  *
  * Returns the available number of threads that this program has access to
@@ -802,9 +802,9 @@ int comp5(const void *a, const void *b) {
  * JOB_COUNT is the first operation called. It finds each line in the file
  * and returns Sortlist[]-style entries into a buffer (which is temporarily
  * allocated from the remove-file-read-buffers).  This is done so that
- * Sortlist can be allocated from contiguous space, makeing realloc much
+ * Sortlist can be allocated from contiguous space, making realloc much
  * cheaper (both on time and memory). Large numbers of lines can then
- * exands the Sortlist until the whole file is processed.  The test
+ * expands the Sortlist until the whole file is processed.  The test
  * cases for rling have hundreds of millions of lines, or billions.  This
  * is also the process that removes Windows-style (\r\n) line termination
  * from the input file.
@@ -1224,7 +1224,7 @@ MDXALIGN void procjob(void *dummy) {
 				    }
 				}
 			    }
-				
+
 			    fflush(job->fo);
 			    release(Common_lock);
 			} else {
@@ -1347,7 +1347,7 @@ MDXALIGN void procjob(void *dummy) {
  *
  * It is run as a separate thread in order to make the mainline code as
  * simple as possible - this just fills the WorkWaiting list with
- * data blocks for the JOB_COUNT fuction, and when it is out of data,
+ * data blocks for the JOB_COUNT function, and when it is out of data,
  * waits for the queue to drain and exits.
  */
 MDXALIGN void filljob(void *dummy) {
@@ -1406,7 +1406,7 @@ MDXALIGN void filljob(void *dummy) {
  * Windows-style eol (\r\n), this is changed to \n\n, and the length
  * reduced by one.
  *
- * While the input file lines are truely "any length", the remove file
+ * While the input file lines are truly "any length", the remove file
  * lines are limited to a bit less than half the buffer size in length.
  * So, if the buffers are 50 megabytes, then the maximum line length permitted
  * is around 25 megabytes.
@@ -1457,7 +1457,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 	if (x >0) {
 	    f = findeol(curpos,x-1);
 	    if (f) break;
-	} else 
+	} else
 	   x = 0;
     }
     curpos = readbuf;
@@ -1654,7 +1654,7 @@ void getnextline(struct Infiles *infile) {
 }
 
 /*
- * rliwrite will write a buffer to the cache in the supplie Infiles.
+ * rliwrite will write a buffer to the cache in the supplied Infiles.
  * If the cache is full, the data is flushed to the already-open file
  * attached. You can flush the last cache by using a NULL buffer
  * pointer.
@@ -2034,7 +2034,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 
 
 
-  
+
 
 
 /* The mainline code.  Yeah, it's ugly, dresses poorly, and smells funny.
@@ -2443,11 +2443,11 @@ errexit:
 	    exit(1);
 	}
 	unlink(DBNAME);
-	
+
 	Sortlist = NULL;
 	RC = (Estline +16) * sizeof(char *);
 	while (RC > 0) {
-	    x = (RC > MAXCHUNK) ? MAXCHUNK : RC; 
+	    x = (RC > MAXCHUNK) ? MAXCHUNK : RC;
 	    RC -= x;
 	    fwrite(Readbuf,x,1,vmfile);
 	}
@@ -2482,12 +2482,12 @@ errexit:
 			newline = NULL;
 			y = ((RC - Estline)+16) * sizeof(char *);
 			while (y > 0) {
-			    x = (y > MAXCHUNK) ? MAXCHUNK : y; 
+			    x = (y > MAXCHUNK) ? MAXCHUNK : y;
 			    fwrite(Readbuf,x,1,vmfile);
 			    y -= x;
 			}
 			fflush(vmfile);
-			for (x = Estline+16; x < RC+16; x++) 
+			for (x = Estline+16; x < RC+16; x++)
 			    fwrite(&newline,8,1,vmfile);
 			fflush(vmfile);
 			Sortlist = mmap(Sortlist,sizeof(char*)*(RC+16),PROT_READ|PROT_WRITE,MAP_FILE|MAP_SHARED,fileno(vmfile),0L);

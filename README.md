@@ -16,9 +16,9 @@
 ## General info
 In July, 2020, @tychotithonus asked a simple question - theoretically, could rli be faster?  Answering that question took the CynoSurePrime team down several roads, looking for "the better ways" to handle the problem. It ended up in a "how many nanoseconds" race in the end!
 
-The essential task of removing lines from a file (or a database) has been fundamental to computing since the very earliest days, and rli seems "good enough" for most purposes.  But when the files get large, the amount of RAM used by rli is high, and the performace was not sufficient to the task at hand.  @tychotithonus also wanted a few new features.
+The essential task of removing lines from a file (or a database) has been fundamental to computing since the very earliest days, and rli seems "good enough" for most purposes.  But when the files get large, the amount of RAM used by rli is high, and the performance was not sufficient to the task at hand.  @tychotithonus also wanted a few new features.
 
-The performance of rling is impressive (this done on a Power8 system with 80 cores). 1billion.txt is a ~10gigabyte file containing 1,000,000,000 lines.  rem is a file containg 6 lines matching ones scattered throughout the 1billion.txt file.
+The performance of rling is impressive (this done on a Power8 system with 80 cores). 1billion.txt is a ~10gigabyte file containing 1,000,000,000 lines.  rem is a file containing 6 lines matching ones scattered throughout the 1billion.txt file.
 
 | Program | Input    |  Remove | Memory | Time |
 | ------- | -------- | ------- | ------ | ---- |
@@ -83,7 +83,7 @@ There are some "hidden features" in rling.
 * -v\
 -v is a secret "verbose" mode switch to rling.  It displays the run time of each section of the program, so you can understand where all the time is going to.
 * -i\
--i "ignores" errors in the filenames.  By default, rling checks to make sure each filename specified on the command line is accessable.  It does not check to make sure it has read access to the file, nor does it care if it is a real file, or a named pipe, and certainly does not check to see if you have specified the correct input and output names!  -i suppresses these checks, which can be handy if you have files which might appear later, for some reason.
+-i "ignores" errors in the filenames.  By default, rling checks to make sure each filename specified on the command line is accessible.  It does not check to make sure it has read access to the file, nor does it care if it is a real file, or a named pipe, and certainly does not check to see if you have specified the correct input and output names!  -i suppresses these checks, which can be handy if you have files which might appear later, for some reason.
 To-do list:\
 Better portability.
 
