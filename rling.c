@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.62 2020/08/11 05:32:41 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.63 2020/08/11 17:57:51 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.63  2020/08/11 17:57:51  dlr
+ * Minor change for FreeBSD
+ *
  * Revision 1.62  2020/08/11 05:32:41  dlr
  * Remove external database, and create my own "virtual memory" for processing large files.
  * This uses mmap to "read" the input file, and to create a temp file for the large 
@@ -1206,19 +1209,20 @@ MDXALIGN void procjob(void *dummy) {
 				    exit(1);
 				}
 			    } else {
-				if (llen > 0) 
+				if (llen > 0)  {
 				    if (fwrite(key,llen,1,job->fo) != 1 ||
 					fwrite("\n",1,1,job->fo) != 1) {
 					fprintf(stderr,"Write error. Disk full?\n");
 					perror(job->fn);
 					exit(1);
 				    }
-			     	else 
+			     	} else {
 				    if (fwrite("\n",1,1,job->fo) != 1) {
 					fprintf(stderr,"Write error. Disk full?\n");
 					perror(job->fn);
 					exit(1);
 				    }
+				}
 			    }
 				
 			    fflush(job->fo);

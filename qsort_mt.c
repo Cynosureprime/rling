@@ -209,7 +209,7 @@ qsort_mt(void *a, size_t n, size_t es, cmp_t *cmp, int maxthreads, int forkelem)
 	if (n < forkelem)
 		goto f1;
 	errno = 0;
-#ifdef __FreeBSD__
+#ifdef NOTDEF
 	if (maxthreads == 0) {
 		/*
 		 * Other candidates:
