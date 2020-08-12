@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.63 2020/08/11 17:57:51 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.64 2020/08/12 00:42:43 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.64  2020/08/12 00:42:43  dlr
+ * Typos
+ *
  * Revision 1.63  2020/08/11 17:57:51  dlr
  * Minor change for FreeBSD
  *
