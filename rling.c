@@ -36,7 +36,7 @@
  *
  * rling uses two (selectable) methods for this:  Hash, and binary search.
  *
- * Hash is the default mode, and usually the fastest.  In this mode, each
+ * Hash is the default mode, and ususally the fastest.  In this mode, each
  * line is read and the XXHASH64 value is computed, and stored in a hash
  * table.  Duplicates are removed as the input file is processed.  The
  * hash table is automatically sized to the input data, but this can be
@@ -103,23 +103,20 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.64 2020/08/12 00:42:43 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.65 2020/08/12 17:57:15 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
- * Revision 1.64  2020/08/12 00:42:43  dlr
- * Typos
- *
- * Revision 1.63  2020/08/11 17:57:51  dlr
- * Minor change for FreeBSD
+ * Revision 1.65  2020/08/12 17:57:15  dlr
+ * Add -l option for length-based limits on compare
  *
  * Revision 1.62  2020/08/11 05:32:41  dlr
  * Remove external database, and create my own "virtual memory" for processing large files.
- * This uses mmap to "read" the input file, and to create a temp file for the large
+ * This uses mmap to "read" the input file, and to create a temp file for the large 
  * internal Sortlist array.  Also, if the input file is not a regular file (if you are
  * using stdin or reading from a named pipe), a staging file is created automatically.
  *
- * This removes the limitations of memory size.  Yes, it is not as fast as reading
- * into real memory, and very large files will still make your disk work very hard,
+ * This removes the liminations of memory size.  Yes, it is not as fast as reading
+ * into real memory, and very large files will still make your disk work very hard, 
  * but it should make those with smaller memory systems very happy.  Use the -f
  * mode as before to keep the standard order, or -fs for a faster output, by sorting
  * the final file (yes, sorted output is faster than non-sorted).
@@ -141,8 +138,8 @@ extern int optreset;
  * Better support for writev on Windows
  *
  * Revision 1.55  2020/08/03 19:32:52  dlr
- * Improve write performance of rling for -s and -c.  This was a two-phase
- * approach: split the load between the cores, and use writev to take
+ * Improve write performance of rling for -s and -c.  This was a two-phase 
+ * approach: split the load between the cores, and use writev to take 
  * advantage of "vectorized" gather capabilities of modern systems.  This
  * more than doubles the speed, going from 112 seconds to 47 seconds to
  * write a billion lines (10 gigabytes).  Still not as fast as the 34 seconds
@@ -379,7 +376,7 @@ struct InHeap {
 };
 
 #ifdef __MSYS__
-#ifndef UIO_MAXIOV
+#ifndef UIO_MAXIOV 
 #define UIO_MAXIOV 1024
 #endif
 #endif
@@ -426,7 +423,7 @@ char *Dupe_fn;
 uint64_t Currem_global,Unique_global,Write_global, Occ_global;
 uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
-int Maxt, Workthread, ProcMode;
+int Maxt, Workthread, ProcMode, LenMatch;
 
 
 int _dowildcard = -1; /* enable wildcard expansion for Windows */
@@ -502,7 +499,7 @@ uint64_t *Common, *Bloom;
  * MarkD(pointer to char*, 64 bit value)
  * MarkD marks a particular entry in the Sortlist array as being a "deleted"
  * line, by setting the most significant bit of the address.  This is not
- * portable, but saves memory.  The validity of the use of this bit is
+ * portable, but saves memory.  The valididity of the use of this bit is
  * tested for in main, by checking the range of memory used to store the
  * file read in.
  */
@@ -634,7 +631,7 @@ void Write_dupe(char *line, uint64_t len) {
     }
     release(Dupe_lock);
 }
-
+    
 /* get_nprocs
  *
  * Returns the available number of threads that this program has access to
@@ -713,15 +710,56 @@ int mystrcmp(const char *a, const char *b) {
   const unsigned char *s1 = (const unsigned char *) a;
   const unsigned char *s2 = (const unsigned char *) b;
   unsigned char c1, c2;
-  do
-    {
-      c1 = (unsigned char) *s1++;
-      c2 = (unsigned char) *s2++;
-      if (c1 == '\n')
-        return c1 - c2;
-    }
-  while (c1 == c2);
-  return c1 - c2;
+      do
+	{
+	  c1 = (unsigned char) *s1++;
+	  if (c1 == '\r')
+	      c1 = (unsigned char) *s1++;
+	  c2 = (unsigned char) *s2++;
+	  if (c2 == '\r') 
+	      c2 = (unsigned char) *s2++;
+	  if (c1 == '\n')
+	    return c1 - c2;
+	}
+      while (c1 == c2);
+      return c1 - c2;
+}
+
+int mylstrcmp(const char *a, const char *b) {
+  const unsigned char *s1 = (const unsigned char *) a;
+  const unsigned char *s2 = (const unsigned char *) b;
+  unsigned char c1, c2;
+  int len, ilen = LenMatch;
+  if (ilen == 0) {
+      do
+	{
+	  c1 = (unsigned char) *s1++;
+	  if (c1 == '\r')
+	      c1 = (unsigned char) *s1++;
+	  c2 = (unsigned char) *s2++;
+	  if (c2 == '\r') 
+	      c2 = (unsigned char) *s2++;
+	  if (c1 == '\n')
+	    return c1 - c2;
+	}
+      while (c1 == c2);
+      return c1 - c2;
+  } else {
+      len = 0;
+      do
+	{
+	  c1 = (unsigned char) *s1++;
+	  if (c1 == '\r')
+	      c1 = (unsigned char) *s1++;
+	  c2 = (unsigned char) *s2++;
+	  if (c2 == '\r') 
+	      c2 = (unsigned char) *s2++;
+	  if (c1 == '\n')
+	    return c1 - c2;
+	}
+      while (c1 == c2 && ++len < ilen);
+      return c1 - c2;
+  }
 }
 
 
@@ -743,7 +781,7 @@ int comp1(const void *a, const void *b) {
 int comp2(const void *a, const void *b) {
     char *a1 = (char *)a;
     char *b1 = (char *)(((uint64_t)*((char **)b)) & 0x7fffffffffffffffL);
-    return(mystrcmp(a1,b1));
+    return(mylstrcmp(a1,b1));
 }
 /* comp3 compares the addresses pointed to by the Sortline[] array.
  * This is used to sort the array back into input-file line order, but also
@@ -805,9 +843,9 @@ int comp5(const void *a, const void *b) {
  * JOB_COUNT is the first operation called. It finds each line in the file
  * and returns Sortlist[]-style entries into a buffer (which is temporarily
  * allocated from the remove-file-read-buffers).  This is done so that
- * Sortlist can be allocated from contiguous space, making realloc much
+ * Sortlist can be allocated from contiguous space, makeing realloc much
  * cheaper (both on time and memory). Large numbers of lines can then
- * expands the Sortlist until the whole file is processed.  The test
+ * exands the Sortlist until the whole file is processed.  The test
  * cases for rling have hundreds of millions of lines, or billions.  This
  * is also the process that removes Windows-style (\r\n) line termination
  * from the input file.
@@ -930,7 +968,7 @@ MDXALIGN void procjob(void *dummy) {
 		key = Sortlist[job->start];
 		unique = 1; rem =0;
 		for (index=job->start+1; index < job->end; index++) {
-		    if (mystrcmp(key,Sortlist[index]) == 0) {
+		    if (mylstrcmp(key,Sortlist[index]) == 0) {
 			rem++;
 			Write_dupe(Sortlist[index],Fileend - Sortlist[index]);
 			MarkDeleted(index);
@@ -1212,22 +1250,21 @@ MDXALIGN void procjob(void *dummy) {
 				    exit(1);
 				}
 			    } else {
-				if (llen > 0)  {
+				if (llen > 0) 
 				    if (fwrite(key,llen,1,job->fo) != 1 ||
 					fwrite("\n",1,1,job->fo) != 1) {
 					fprintf(stderr,"Write error. Disk full?\n");
 					perror(job->fn);
 					exit(1);
 				    }
-			     	} else {
+			     	else 
 				    if (fwrite("\n",1,1,job->fo) != 1) {
 					fprintf(stderr,"Write error. Disk full?\n");
 					perror(job->fn);
 					exit(1);
 				    }
-				}
 			    }
-
+				
 			    fflush(job->fo);
 			    release(Common_lock);
 			} else {
@@ -1350,7 +1387,7 @@ MDXALIGN void procjob(void *dummy) {
  *
  * It is run as a separate thread in order to make the mainline code as
  * simple as possible - this just fills the WorkWaiting list with
- * data blocks for the JOB_COUNT function, and when it is out of data,
+ * data blocks for the JOB_COUNT fuction, and when it is out of data,
  * waits for the queue to drain and exits.
  */
 MDXALIGN void filljob(void *dummy) {
@@ -1409,7 +1446,7 @@ MDXALIGN void filljob(void *dummy) {
  * Windows-style eol (\r\n), this is changed to \n\n, and the length
  * reduced by one.
  *
- * While the input file lines are truly "any length", the remove file
+ * While the input file lines are truely "any length", the remove file
  * lines are limited to a bit less than half the buffer size in length.
  * So, if the buffers are 50 megabytes, then the maximum line length permitted
  * is around 25 megabytes.
@@ -1460,7 +1497,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 	if (x >0) {
 	    f = findeol(curpos,x-1);
 	    if (f) break;
-	} else
+	} else 
 	   x = 0;
     }
     curpos = readbuf;
@@ -1639,7 +1676,7 @@ void getnextline(struct Infiles *infile) {
 		fprintf(stderr,"Memory is set to %"PRIu64", so try -M %"PRIu64"\n",MaxMem, 2*MaxMem);
 		exit(1);
 	    }
-	    res = mystrcmp(lastline,infile->curline);
+	    res = mylstrcmp(lastline,infile->curline);
 	    if (res > 0) {
 		fprintf(stderr,"File \"%s\" is not in sorted order at line %"PRIu64"\n",infile->fn,infile->line);
 		fprintf(stderr,"Line %"PRIu64": ",infile->line-1);prstr(lastline,lastlen);
@@ -1657,7 +1694,7 @@ void getnextline(struct Infiles *infile) {
 }
 
 /*
- * rliwrite will write a buffer to the cache in the supplied Infiles.
+ * rliwrite will write a buffer to the cache in the supplie Infiles.
  * If the cache is full, the data is flushed to the already-open file
  * attached. You can flush the last cache by using a NULL buffer
  * pointer.
@@ -1831,7 +1868,7 @@ void rli2(int argc, char **argv) {
     Write = rem = 0;
     while (Infile[0].curlen && Infile[0].eof == 0) {
 	if (heap[0].In->curlen && heap[0].In->eof == 0) {
-	    res = mystrcmp(Infile[0].curline,heap[0].In->curline);
+	    res = mylstrcmp(Infile[0].curline,heap[0].In->curline);
 	    if (res == 0) {
 		if (DoCommon) {
 		    rliwrite(&Infile[1],Infile[0].curline,Infile[0].curlen);
@@ -2037,7 +2074,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 
 
 
-
+  
 
 
 /* The mainline code.  Yeah, it's ugly, dresses poorly, and smells funny.
@@ -2083,6 +2120,7 @@ int main(int argc, char **argv) {
     Dedupe = 1;
     DoDebug = 0;
     SortOut = 0;
+    LenMatch = 0;
     Maxdepth_global = 0;
     Workthread = 0;
     last = 99;
@@ -2093,9 +2131,9 @@ int main(int argc, char **argv) {
     current_utc_time(&starttime);
     current_utc_time(&inittime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:D:T:M:")) != -1) {
+    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:l:D:T:M:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:D:T:M:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:l:D:T:M:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -2116,8 +2154,9 @@ errexit:
 		fprintf(stderr,"\t-t number\tNumber of threads to use\n");
 		fprintf(stderr,"\t-p prime\tForce size of hash table\n");
 		fprintf(stderr,"\t-b\t\tUse binary search vs hash (slower, but less memory)\n");
-		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory)\n");
 		fprintf(stderr,"\t-2\t\tUse rli2 mode - all files must be sorted. Low mem usage.\n");
+		fprintf(stderr,"\t-f\t\tUse files instead of memory (slower, but small memory)\n");
+		fprintf(stderr,"\t-l [len]\t\tLimit all matching to a specific length.\n");
 		fprintf(stderr,"\t-M memsize\tMaximum memory to use for -f mode\n");
 		fprintf(stderr,"\t-T path\t\tDirectory to store temp files in\n");
 		fprintf(stderr,"\t-q [cahwl]\tDo frequency analysis on input\n\t\t\ta - all output, c - count, l - length, w - word,\n\t\t\ts - running statistics, h - append histogram\n");
@@ -2143,6 +2182,13 @@ errexit:
 		ProcMode = 3;
 		break;
 
+	    case 'l':
+		LenMatch = atoi(optarg);
+		if (LenMatch <= 0) {
+		    fprintf(stderr,"Length to match must be positive, not %d\n",LenMatch);
+		    exit(1);
+		}
+		break;
 	    case 'q':
 		ProcMode = 4;
 		qopts = strdup(optarg);
@@ -2256,6 +2302,12 @@ errexit:
         fprintf(stderr,"Need at least an input and an output file to process.\n");
 	goto errexit;
     }
+
+    if (LenMatch && ProcMode == 0) {
+	ProcMode = 1;
+	fprintf(stderr,"Length matching requires -b, -2 or -f modes, so set to -b\n");
+    }
+
 
     if (ErrCheck) {
         for (x=2; x<argc; x++) {
@@ -2446,11 +2498,11 @@ errexit:
 	    exit(1);
 	}
 	unlink(DBNAME);
-
+	
 	Sortlist = NULL;
 	RC = (Estline +16) * sizeof(char *);
 	while (RC > 0) {
-	    x = (RC > MAXCHUNK) ? MAXCHUNK : RC;
+	    x = (RC > MAXCHUNK) ? MAXCHUNK : RC; 
 	    RC -= x;
 	    fwrite(Readbuf,x,1,vmfile);
 	}
@@ -2485,12 +2537,12 @@ errexit:
 			newline = NULL;
 			y = ((RC - Estline)+16) * sizeof(char *);
 			while (y > 0) {
-			    x = (y > MAXCHUNK) ? MAXCHUNK : y;
+			    x = (y > MAXCHUNK) ? MAXCHUNK : y; 
 			    fwrite(Readbuf,x,1,vmfile);
 			    y -= x;
 			}
 			fflush(vmfile);
-			for (x = Estline+16; x < RC+16; x++)
+			for (x = Estline+16; x < RC+16; x++) 
 			    fwrite(&newline,8,1,vmfile);
 			fflush(vmfile);
 			Sortlist = mmap(Sortlist,sizeof(char*)*(RC+16),PROT_READ|PROT_WRITE,MAP_FILE|MAP_SHARED,fileno(vmfile),0L);
