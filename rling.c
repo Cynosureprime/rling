@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.66 2020/08/13 03:22:19 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.67 2020/08/13 06:18:14 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.67  2020/08/13 06:18:14  dlr
+ * Add notes on options
+ *
  * Revision 1.66  2020/08/13 03:22:19  dlr
  * Refix typos
  *
@@ -427,6 +430,14 @@ uint64_t Currem_global,Unique_global,Write_global, Occ_global;
 uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
 int Maxt, Workthread, ProcMode, LenMatch;
+
+char *Modes[] = {
+	"Hash (no switch, default mode)",
+	"Binary search (-b)",
+	"File with Binary search (-f)",
+	"Sorted lists (-2)",
+	"Analysis mode (-q)"
+};
 
 
 int _dowildcard = -1; /* enable wildcard expansion for Windows */
@@ -2171,6 +2182,8 @@ errexit:
 		break;
 
 	    case 'b':
+		if (ProcMode) 
+		    fprintf(stderr,"Mode was %s, is now %s\n",Modes[ProcMode],Modes[1]);
 	        ProcMode = 1;
 		break;
 
@@ -2179,10 +2192,14 @@ errexit:
 		break;
 
 	    case 'f':
+		if (ProcMode) 
+		    fprintf(stderr,"Mode was %s, is now %s\n",Modes[ProcMode],Modes[2]);
 		ProcMode = 2;
 		break;
 
 	    case '2':
+		if (ProcMode) 
+		    fprintf(stderr,"Mode was %s, is now %s\n",Modes[ProcMode],Modes[3]);
 		ProcMode = 3;
 		break;
 
@@ -2194,6 +2211,8 @@ errexit:
 		}
 		break;
 	    case 'q':
+		if (ProcMode) 
+		    fprintf(stderr,"Mode was %s, is now %s\n",Modes[ProcMode],Modes[4]);
 		ProcMode = 4;
 		qopts = strdup(optarg);
 		y = 0;
@@ -2257,6 +2276,8 @@ errexit:
 		    fprintf(stderr,"%"PRIu64" bytes isn't going to be very effective\nTry using more than 64k\n",RC);
 		}
 		fprintf(stderr,"Memory for cache set to %"PRIu64" bytes (was %"PRIu64")\n",RC,MaxMem);
+		if (ProcMode != 3)
+		    fprintf(stderr,"   - but this will have no effect, unless -2 is in use\n");
 		MaxMem = RC;
 		linein = malloc(MaxMem);
 		if (!linein) {
