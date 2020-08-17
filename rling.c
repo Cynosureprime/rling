@@ -103,9 +103,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.67 2020/08/13 06:18:14 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.68 2020/08/17 16:23:25 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.68  2020/08/17 16:23:25  dlr
+ * Fix CRLF vs LF transitions for Windows.  This was working, but I broke it adding mmap
+ * support a couple of versions back.
+ *
  * Revision 1.67  2020/08/13 06:18:14  dlr
  * Add notes on options
  *
@@ -1111,6 +1115,7 @@ MDXALIGN void procjob(void *dummy) {
 			key = Sortlist[index];
 			eol = findeol(key,Fileend-key);
 			if (!eol) eol = Fileend;
+			if (eol[-1] == '\r') eol--;
 			llen = eol - key;
 			crc =  XXH3_64bits(key,llen);
 			j = crc & HashMask;
@@ -1159,6 +1164,7 @@ MDXALIGN void procjob(void *dummy) {
 			key = (char *)((uint64_t)Sortlist[index] & 0x7fffffffffffffffL);
 			eol = findeol(key,Fileend-key);
 			if (!eol) eol = Fileend;
+			if (eol[-1] == '\r') eol--;
 			llen = eol - key;
 			crc =  XXH3_64bits(key,llen);
 			j = crc % HashPrime;
@@ -1223,7 +1229,7 @@ MDXALIGN void procjob(void *dummy) {
 			key= (char*)RC;
 			eol = findeol(key,thisend-RC);
 			if (!eol) eol = (char *)thisend;
-			if (*eol == '\r') eol--;
+			if (eol[-1] == '\r') eol--;
 			llen = eol-key;
 			if ((twrite + llen +1) > WRITEMAX || (outcount+2) >= job->writesize) {
 			    int windex;
@@ -1337,6 +1343,7 @@ MDXALIGN void procjob(void *dummy) {
 			    key= (char*)RC;
 			    eol = findeol(key,thisend-RC);
 			    if (!eol) eol = (char *)thisend;
+			    if (eol[-1] == '\r') eol--;
 			    llen = eol-key;
 			    if (llen && key != newline) memcpy(newline,key,llen);
 			    newline[llen] = '\n'; newline += llen + 1;
@@ -1373,6 +1380,7 @@ MDXALIGN void procjob(void *dummy) {
 			Freq[thisnum].count = j;
 			eol = findeol(key,Fileend - key);
 			if (!eol) eol = Fileend;
+			if (eol[-1] == '\r') eol--;
 			llen = eol - key;
 			Freq[thisnum++].len = llen;
 			if (Histogram) __sync_fetch_and_add(&Histogram[llen],1);
