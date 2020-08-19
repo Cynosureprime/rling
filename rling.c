@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.68 2020/08/17 16:23:25 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.69 2020/08/19 04:38:52 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.69  2020/08/19 04:38:52  dlr
+ * Improved read performance on files
+ *
  * Revision 1.68  2020/08/17 16:23:25  dlr
  * Fix CRLF vs LF transitions for Windows.  This was working, but I broke it adding mmap
  * support a couple of versions back.
@@ -2475,13 +2478,36 @@ errexit:
 	fprintf(stderr,"Reading \"%s\"... %"PRIu64" bytes total in %.4f seconds\n",argv[0],filesize,wtime);
     } else {
 	fprintf(stderr,"Reading \"%s\"...",argv[0]);fflush(stderr);
+	if (fstat(fileno(fin),&statb)) {
+		fprintf(stderr,"Could not stat input file.  This is probably not good news\n");
+		perror(argv[0]);
+		exit(1);
+	}
+	if ((statb.st_mode & S_IFREG)) {
+	    filesize = statb.st_size;
+	    Fileinmem = malloc(filesize + 16);
+	    if (!Fileinmem) {
+	        fprintf(stderr,"File \"%s\" claimed to be a regular file of size %"PRIu64"\nbut not enough memory was available.  Make more memory available, or check file.\n",argv[0],filesize);
+		exit (1);
+	    }
+	    readsize = fread(Fileinmem,1,filesize,fin);
+	    if (readsize < filesize) {
+	        if (readsize < 0) {
+		   fprintf(stderr,"Read error on input file.\n");
+		   perror(argv[0]);
+		   exit(1);
+		}
+		if (readsize < filesize) { 
+		    filesize = readsize;
+		}
+	    }
+	} else {
+	    Fileinmem = malloc(MAXCHUNK + 16);
+	    filesize = 0;
+	}
 	Line = 0;
-	WorkUnitLine =  WorkUnitSize *8;
-	if (WorkUnitLine > filesize)
-	    WorkUnitLine = filesize;
 
-	Fileinmem = malloc(MAXCHUNK + 16);
-	for (filesize = 0; !feof(fin); ) {
+	while (!feof(fin)) {
 	    readsize = fread(&Fileinmem[filesize],1,MAXCHUNK,fin);
 	    if (readsize <= 0) {
 		if (feof(fin) || readsize <0) break;
@@ -2514,7 +2540,7 @@ errexit:
     }
     fprintf(stderr,"Counting lines...    ");fflush(stderr);
 
-    WorkUnitLine = filesize / (Maxt * 256);
+    WorkUnitLine = WorkUnitSize * 8;
     if (WorkUnitLine < Maxt)
 	WorkUnitLine = filesize;
     thisline = Fileinmem;
@@ -2557,8 +2583,7 @@ errexit:
 	possess(WUWaiting);
 	wait_for(WUWaiting, NOT_TO_BE, 0);
 	wulast = NULL;
-	for (x=0,ch = 0,wu = WUHead; wu; wulast = wu, wu = wu->next) {
-		x++;
+	for (ch = 0,wu = WUHead; wu; wulast = wu, wu = wu->next) {
 	    if (wu->start == curpos) {
 		if ((Line+wu->count) >= (Estline-2)) {
 		    if (filesize)
