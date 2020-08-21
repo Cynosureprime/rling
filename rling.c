@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.70 2020/08/19 15:58:36 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.71 2020/08/21 18:03:25 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.71  2020/08/21 18:03:25  dlr
+ * Check incoming list for lexical order.  If already sorted, no need to re-sort.
+ *
  * Revision 1.70  2020/08/19 15:58:36  dlr
  * Remove write vector code, replace with buffer.  3x or so faster now
  *
@@ -427,7 +430,7 @@ char *Dupe_fn;
 uint64_t Currem_global,Unique_global,Write_global, Occ_global;
 uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
-int Maxt, Workthread, ProcMode, LenMatch;
+int Maxt, Workthread, ProcMode, LenMatch, IsSorted;
 
 char *Modes[] = {
 	"Hash (no switch, default mode)",
@@ -898,6 +901,7 @@ MDXALIGN void procjob(void *dummy) {
     uint64_t x, unique, occ, rem,thisnum, crc, index, j, RC, COM, thisend;
     int64_t llen, maxdepth, minlen, maxlen;
     int res, curline, numline, ch, delflag, outcount;
+    int issorted;
 
     while (1) {
         possess(WorkWaiting);
@@ -925,6 +929,7 @@ MDXALIGN void procjob(void *dummy) {
 		wu->start = index;
 		minlen = (uint32_t) -1L;
 		maxlen = 0;
+		issorted = IsSorted;
 		do {
 		    newline = &Fileinmem[index];
 		    wu->Sortlist[j++] = newline;
@@ -968,6 +973,13 @@ MDXALIGN void procjob(void *dummy) {
 			release(wu->wulock);
 			wu->start = index;
 			j = wu->count = 0;
+		    }
+		    if (issorted) {
+			if (index < job->end && mystrcmp(newline,&Fileinmem[index]) > 0) {
+			    issorted = 0;
+			    while (issorted != IsSorted)
+				__sync_val_compare_and_swap(&IsSorted,IsSorted,issorted);
+			}
 		    }
 		} while (index < job->end);
 		while (maxlen > Maxlen_global)
@@ -1348,9 +1360,12 @@ MDXALIGN void procjob(void *dummy) {
 MDXALIGN void filljob(void *dummy) {
     struct JOB *job;
     uint64_t work,filesize;
-    char *eol;
+    uint64_t index;
+    char *eol, *thisline;
+    int issorted;
 
 
+    IsSorted = issorted = 1;
     filesize = Filesize;
     work = 0;
     while (work < filesize) {
@@ -1364,13 +1379,26 @@ MDXALIGN void filljob(void *dummy) {
 	job->func = JOB_COUNT;
 	job->start = work;
 	job->end = work + WorkUnitLine;
-	if (job->end > filesize) {
+	if (job->end >= filesize) {
 	    job->end = filesize;
 	} else {
 	    eol = findeol(&Fileinmem[job->end],filesize-job->end);
 	    if (!eol || eol > &Fileinmem[filesize]) {
 		job->end = filesize;
 	    } else {
+		if (issorted) {
+		    for (index=job->end-1; index > job->start; index--) {
+			if (Fileinmem[index] == '\n') {
+			    index++;
+			    break;
+			}
+		    }
+		    if (mystrcmp(&Fileinmem[index],eol+1) > 0) {
+			issorted = 0;
+			while (issorted != IsSorted)
+			    __sync_val_compare_and_swap(&IsSorted,IsSorted,issorted);
+		    }
+		}
 		job->end = (eol-Fileinmem) + 1;
 	    }
 	}
@@ -2724,7 +2752,7 @@ errexit:
 	    if (WorkUnitLine < LINELIMIT)
 		WorkUnitLine = LINELIMIT;
 	    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
-	    qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
+	    if (!IsSorted) qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
 	    current_utc_time(&curtime);
 	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
@@ -2915,7 +2943,7 @@ errexit:
     if (ProcMode == 0 && SortOut) {
 	fprintf(stderr,"Final sort ");fflush(stdout);
 	forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
-	qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
+	if (!IsSorted) qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
