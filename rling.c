@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.71 2020/08/21 18:03:25 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.72 2020/08/22 03:16:37 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.72  2020/08/22 03:16:37  dlr
+ * Improved write speed for already-sorted files, when sort requested.
+ *
  * Revision 1.71  2020/08/21 18:03:25  dlr
  * Check incoming list for lexical order.  If already sorted, no need to re-sort.
  *
@@ -1219,7 +1222,7 @@ MDXALIGN void procjob(void *dummy) {
 	    case JOB_WRITE:
 		unique = 0;
 		thisend = (uint64_t)Fileend;
-		if (DoCommon || SortOut || ProcMode == 2) {
+		if (DoCommon || (SortOut && !IsSorted) || ProcMode == 2) {
 		    uint64_t twrite;
 		    twrite = 0;
 		    newline = job->writeindex;
@@ -2981,7 +2984,7 @@ errexit:
 	writeanal(fo,argv[1],qopts,Line);
     } else {
 	fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
-	if (DoCommon || SortOut) {
+	if (DoCommon || (SortOut && !IsSorted)) {
 	    work = 0;
 	    if (Line) work = (filesize / Line);
 	    if (work) work = Jobs[0].writesize /  work;
