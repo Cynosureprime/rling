@@ -103,9 +103,13 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.72 2020/08/22 03:16:37 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.73 2020/08/23 18:19:40 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.73  2020/08/23 18:19:40  dlr
+ * Another improvement to write performance, and another factor of 3 for sorted writes.
+ * This applies primarily to very high speed disk systems (>1gbyte/sec).
+ *
  * Revision 1.72  2020/08/22 03:16:37  dlr
  * Improved write speed for already-sorted files, when sort requested.
  *
@@ -2080,7 +2084,6 @@ int main(int argc, char **argv) {
     int curline, numline, Linecount, dbindex;
     char *readbuf;
     struct LineInfo *readindex;
-    int Workthread, locoff;
     FILE *fin, *fi, *fo, *vmfile;
     uint64_t crc, memsize, memscale;
     off_t filesize, readsize;
@@ -2984,7 +2987,51 @@ errexit:
 	writeanal(fo,argv[1],qopts,Line);
     } else {
 	fprintf(stderr,"Writing %sto \"%s\"\n",(DoCommon)?"common lines ":"",argv[1]);
+	if (Workthread) {
+	    possess(FreeWaiting);
+	    wait_for(FreeWaiting, NOT_TO_BE,0);
+	    job = FreeHead;
+	    FreeHead = job->next;
+	    if (FreeHead == NULL) FreeTail = &FreeHead;
+	    twist(FreeWaiting, BY, -1);
+	    job->next = NULL;
+	    job->func = JOB_DONE;
+	    possess(WorkWaiting);
+	    *WorkTail = job;
+	    WorkTail = &(job->next);
+	    twist(WorkWaiting,BY,+1);
+	    x = join_all();
+	    possess(FreeWaiting);
+	    *FreeTail = job;
+	    FreeTail = &(job->next);
+	    twist(FreeWaiting, BY, +1);
+	    possess(WorkWaiting);
+	    WorkHead = NULL;
+	    WorkTail = &WorkHead;
+	    twist(WorkWaiting, TO, 0);
+	    Workthread =0;
+	}
 	if (DoCommon || (SortOut && !IsSorted)) {
+	    if (Maxt < 8) {
+	 	Jobs = calloc(4,sizeof(struct JOB));
+		if (!Jobs) { 
+		    fprintf(stderr,"Not enough memory to allocate a few bytes for structures to write\nMake more memory available.\n");
+		    exit(1);
+		}
+	    }
+	    Maxt = 8;
+	    y = MAXCHUNK / Maxt;
+	    FreeTail = &FreeHead;
+	    for (x=0; x<Maxt; x++) {
+		Jobs[x].writeindex = &Readbuf[x*y];
+		Jobs[x].writesize = y;
+		job = &Jobs[x];
+		*FreeTail = job;
+		job->next =NULL;
+		FreeTail = &(job->next);
+	    }
+	    possess(FreeWaiting);
+	    twist(FreeWaiting,TO,Maxt);
 	    work = 0;
 	    if (Line) work = (filesize / Line);
 	    if (work) work = Jobs[0].writesize /  work;
@@ -3062,6 +3109,7 @@ finalexit:
 	twist(WorkWaiting,BY,+1);
 	x = join_all();
     }
+
 
     return(0);
 }
