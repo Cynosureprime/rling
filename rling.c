@@ -103,9 +103,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.73 2020/08/23 18:19:40 dlr Exp dlr $";
+ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.74 2020/08/24 14:25:43 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.74  2020/08/24 14:25:43  dlr
+ * Fix for abort during write when <8 cores are present on system
+ *
  * Revision 1.73  2020/08/23 18:19:40  dlr
  * Another improvement to write performance, and another factor of 3 for sorted writes.
  * This applies primarily to very high speed disk systems (>1gbyte/sec).
@@ -3013,7 +3016,7 @@ errexit:
 	}
 	if (DoCommon || (SortOut && !IsSorted)) {
 	    if (Maxt < 8) {
-	 	Jobs = calloc(4,sizeof(struct JOB));
+	 	Jobs = calloc(8,sizeof(struct JOB));
 		if (!Jobs) { 
 		    fprintf(stderr,"Not enough memory to allocate a few bytes for structures to write\nMake more memory available.\n");
 		    exit(1);
