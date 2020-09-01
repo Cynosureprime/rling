@@ -42,10 +42,19 @@
  * If an output file exists, it is appended to.
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.7 2020/07/31 21:48:49 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/splitlen.c,v 1.10 2020/09/01 21:51:47 dlr Exp dlr $";
 
 /*
  * $Log: splitlen.c,v $
+ * Revision 1.10  2020/09/01 21:51:47  dlr
+ * Minor update
+ *
+ * Revision 1.9  2020/09/01 21:49:23  dlr
+ * Add zero in front of output numbers for lengths 0-9
+ *
+ * Revision 1.8  2020/08/03 22:43:46  dlr
+ * Improve Windows I/O
+ *
  * Revision 1.7  2020/07/31 21:48:49  dlr
  * Add help for new options
  *
@@ -293,7 +302,7 @@ FILE *getfo(int64_t len, struct OutCache **outcache) {
 	src = OutName;
 	for (dest=OutCache[x].OutName; *src && *src != delim; src++) 
 	    *dest++ = *src;
-	dest += sprintf(dest,"_%"PRIi64,len);
+	dest += sprintf(dest,"_%02"PRIi64,len);
 	if (*src == delim && src[1]) strncpy(dest,src+1,(MAXPATHLEN*2)-(src-OutName));
 	OutCache[x].state = ready;
     }
@@ -302,7 +311,6 @@ FILE *getfo(int64_t len, struct OutCache **outcache) {
 	if (OutCache[x].state == ready) {
 	    OutCache[x].fo = fopen(OutCache[x].OutName,"ab");
 	    if (!OutCache[x].fo) {
-		perror(OutCache[x].OutName);
 		if (errno == ENFILE || errno == EMFILE) {
 		    closesome(OutCacheSize/2);
 		    OutCache[x].fo = fopen(OutCache[x].OutName,"ab");
@@ -627,7 +635,7 @@ int main(int argc,char **argv) {
     }
 
     if (argc == 0) {
-#ifdef _WIN32
+#if defined _WIN32
 setmode(0,O_BINARY);
 #endif
         process(stdin,"stdin");
@@ -635,7 +643,7 @@ setmode(0,O_BINARY);
     for (x=0; x<argc; x++) {
 	if (strcmp(argv[x],"stdin") == 0) {
 	    fi = stdin;
-#ifdef _WIN32
+#if defined _WIN32
 setmode(0,O_BINARY);
 #endif
 	} else
