@@ -1246,7 +1246,7 @@ MDXALIGN void procjob(void *dummy) {
 			key= (char*)RC;
 			eol = findeol(key,thisend-RC);
 			if (!eol) eol = (char *)thisend;
-			if (eol[-1] == '\r') eol--;
+			if (eol > key && eol[-1] == '\r') eol--;
 			llen = eol-key;
 			if ((twrite + llen +1) >= job->writesize) {
 			    possess(Common_lock);
@@ -1297,7 +1297,7 @@ MDXALIGN void procjob(void *dummy) {
 			    key= (char*)RC;
 			    eol = findeol(key,thisend-RC);
 			    if (!eol) eol = (char *)thisend;
-			    if (eol[-1] == '\r') eol--;
+			    if (eol > key && eol[-1] == '\r') eol--;
 			    llen = eol-key;
 			    if (llen && key != newline) memcpy(newline,key,llen);
 			    newline[llen] = '\n'; newline += llen + 1;
@@ -1334,7 +1334,7 @@ MDXALIGN void procjob(void *dummy) {
 			Freq[thisnum].count = j;
 			eol = findeol(key,Fileend - key);
 			if (!eol) eol = Fileend;
-			if (eol[-1] == '\r') eol--;
+			if (eol > key && eol[-1] == '\r') eol--;
 			llen = eol - key;
 			Freq[thisnum++].len = llen;
 			if (Histogram) __sync_fetch_and_add(&Histogram[llen],1);
