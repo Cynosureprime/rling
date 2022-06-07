@@ -741,7 +741,7 @@ int mystrcmp(const char *a, const char *b) {
 	  if (c1 == '\r')
 	      c1 = (unsigned char) *s1++;
 	  c2 = (unsigned char) *s2++;
-	  if (c2 == '\r') 
+	  if (c2 == '\r' || c2 == '\t') 
 	      c2 = (unsigned char) *s2++;
 	  if (c1 == '\n')
 	    return c1 - c2;
