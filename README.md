@@ -87,6 +87,31 @@ There are some "hidden features" in rling.
 To-do list:\
 Better portability.
 
+## Command-line Arguments
+```
+        -i              Ignore any error/missing files on remove list
+        -d              Removes duplicate lines from input (on by default)
+        -D file         Write duplicates to file
+        -n              Do not remove duplicate lines from input
+        -c              Output lines common to input and remove files
+        -s              Sort output. Default is input order.
+                        This will make the -b and -f options substantially faster
+        -t number       Number of threads to use
+        -p prime        Force size of hash table
+        -b              Use binary search vs hash (slower, but less memory)
+        -2              Use rli2 mode - all files must be sorted. Low mem usage.
+        -f              Use files instead of memory (slower, but small memory)
+        -l [len]                Limit all matching to a specific length.
+        -M memsize      Maximum memory to use for -f mode
+        -T path         Directory to store temp files in
+        -q [cahwl]      Do frequency analysis on input
+                        a - all output, c - count, l - length, w - word,
+                        s - running statistics, h - append histogram
+                        Additional files will be matched against input files
+        -h              This help
+```
+stdin and stdout can be used in the place of any filename
+
 ## Status
 Project is in progress, and is in "beta" release.  We don't think there are any bugs left, but I'm sure there will be new features.
 
