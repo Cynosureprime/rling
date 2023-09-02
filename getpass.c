@@ -57,10 +57,16 @@
  *
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.7 2020/07/31 02:36:55 dlr Exp dlr $";
+static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.10 2023/09/02 05:27:23 dlr Exp dlr $";
 
 /*
  * $Log: getpass.c,v $
+ * Revision 1.10  2023/09/02 05:27:23  dlr
+ * Fix memory expansion on read
+ *
+ * Revision 1.9  2023/09/02 05:16:50  dlr
+ * Fix read buffer
+ *
  * Revision 1.7  2020/07/31 02:36:55  dlr
  * Add -S/-U to allow $HEX[] map forcing.
  *
@@ -250,32 +256,32 @@ again:
 	else
 	    eol = NULL;
 	if (!eol && !Ateof) {  /* Can't find end of line */
-	    if (cur >= size) { /* out of buffer */
-		if (cur > size) cur = size;
-		len = size - cur;
-		if (len >0) memcpy(Cache,&Cache[cur],len);
-		size -= cur;
-		cur = 0;
+	    if (cur == 0) {
+		/* Not in the cache.  increase size */
+		Cache = realloc(Cache, (Cachesize *2) + 16);
+		if (!Cache) {
+		    fprintf(stderr,"Could not expand cache to %"PRIu64" bytes.  Make more memory\navailable, or check the input file \"%s\"\n",Cachesize*2,fn);
+		    exit(1);
+		}
+		Cachesize = (Cachesize*2);
 		readsize = fread(&Cache[size],1,Cachesize - size,fi);
 		if (readsize == 0) Ateof = 1;
 		size += readsize;
 		end = &Cache[size];
 		in = &Cache[cur];
-		if (size == cur) break;
 		goto again;
 	    }
-	    /* Not in the cache.  increase size */
-	    Cache = realloc(Cache, (Cachesize *2) + 16);
-	    if (!Cache) {
-	        fprintf(stderr,"Could not expand cache to %"PRIu64" bytes.  Make more memory\navailable, or check the input file \"%s\"\n",Cachesize*2,fn);
-		exit(1);
-	    }
-	    Cachesize = (Cachesize*2);
+	    if (cur > size) cur = size;
+	    len = size - cur;
+	    if (len >0) memcpy(Cache,&Cache[cur],len);
+	    size -= cur;
+	    cur = 0;
 	    readsize = fread(&Cache[size],1,Cachesize - size,fi);
 	    if (readsize == 0) Ateof = 1;
 	    size += readsize;
 	    end = &Cache[size];
 	    in = &Cache[cur];
+	    if (size == cur) break;
 	    goto again;
 	}
 	if (!eol && Ateof) eol = end;
@@ -603,12 +609,12 @@ int main(int argc,char **argv) {
     }
     argc -= optind;
     argv += optind;
-#ifdef _WIN32
+#if defined _WIN32 || defined __MSYS__
 setmode(1,O_BINARY);
 #endif
 
     if (argc == 0) {
-#ifdef _WIN32
+#if defined _WIN32 || defined __MSYS__
 setmode(0,O_BINARY);
 #endif
         process(stdin,"stdin");
@@ -634,7 +640,7 @@ for (x=0; x<argc; x++) {
 
 	if (strcmp(argv[x],"stdin") == 0) {
 	    fi = stdin;
-#ifdef _WIN32
+#if defined _WIN32 || defined __MSYS__
 setmode(0,O_BINARY);
 #endif
 	} else
