@@ -741,10 +741,12 @@ int mystrcmp(const char *a, const char *b) {
 	  if (c1 == '\r')
 	      c1 = (unsigned char) *s1++;
 	  c2 = (unsigned char) *s2++;
-	  if (c2 == '\r') 
+	  if (c2 == '\r')
 	      c2 = (unsigned char) *s2++;
-	  if (c1 == '\n')
-	    return c1 - c2;
+	  if (c1 == '\n') {
+            if (c2 < c1)  return 0;
+            return c1 - c2;
+          }
 	}
       while (c1 == c2);
       return c1 - c2;
@@ -762,10 +764,12 @@ int mylstrcmp(const char *a, const char *b) {
 	  if (c1 == '\r')
 	      c1 = (unsigned char) *s1++;
 	  c2 = (unsigned char) *s2++;
-	  if (c2 == '\r') 
+	  if (c2 == '\r')
 	      c2 = (unsigned char) *s2++;
-	  if (c1 == '\n')
-	    return c1 - c2;
+	  if (c1 == '\n') {
+            if (c2 < c1)  return 0;
+            return c1 - c2;
+          }
 	}
       while (c1 == c2);
       return c1 - c2;
