@@ -349,7 +349,8 @@ extern int optreset;
 #include <xmmintrin.h>
 #endif
 
-extern void qsort_mt();
+typedef int cmp_t(const void *, const void *);
+extern void qsort_mt(void *a, size_t n, size_t es, cmp_t *cmp, int maxthreads, int forkelem);
 
 
 /* After LINELIMIT lines, threads kick in */
