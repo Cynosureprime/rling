@@ -2970,7 +2970,7 @@ errexit:
 	    if (WorkUnitLine < LINELIMIT)
 		WorkUnitLine = LINELIMIT;
 	    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
-	    if (!IsSorted) qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
+	    if (!IsSorted) qsort_mt(Sortlist,Line,sizeof(Sortlist[0]),comp1,Maxt,forkelem);
 	    current_utc_time(&curtime);
 	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
@@ -3171,7 +3171,7 @@ errexit:
     if (ProcMode == 0 && SortOut) {
 	fprintf(stderr,"Final sort ");fflush(stdout);
 	forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
-	if (!IsSorted) qsort_mt(Sortlist,Line,sizeof(char **),comp1,Maxt,forkelem);
+	if (!IsSorted) qsort_mt(Sortlist,Line,sizeof(Sortlist[0]),comp1,Maxt,forkelem);
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
@@ -3180,7 +3180,8 @@ errexit:
     }
     if ((ProcMode == 2 || ProcMode == 1) && SortOut == 0) {
 	fprintf(stderr,"Final sort ");fflush(stdout);
-	qsort_mt(Sortlist,Line,sizeof(char **),comp3,Maxt,forkelem);
+	forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
+	qsort_mt(Sortlist,Line,sizeof(Sortlist[0]),comp3,Maxt,forkelem);
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
