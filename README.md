@@ -73,14 +73,14 @@ rling [options] input output [remfile1 remfile2 ...]
 | Option | Description |
 | ------ | ----------- |
 | `-i` | Ignore missing or inaccessible files on the remove list instead of aborting. |
-| `-d` | Remove duplicate lines from input (on by default). |
+| `-d` | Remove duplicate lines from input (on by default). The first occurrence of each line is always kept. |
 | `-D file` | Write duplicate lines to `file`. |
 | `-n` | Do **not** remove duplicate lines from input. |
 | `-c` | Output only lines **common** to both the input and the remove files. |
 | `-s` | Sort output. Default is to preserve input order. Sorting makes `-b` and `-f` substantially faster. |
 | `-t number` | Number of threads to use (default: all available cores). |
 | `-p prime` | Force the hash table to a specific size. A power-of-two value uses shift-and-mask instead of modulo. |
-| `-b` | Use binary search instead of hashing. Slower, but uses roughly half the memory. |
+| `-b` | Use binary search instead of hashing. Slower, but uses roughly half the memory. Produces the same output as the default hash mode. |
 | `-2` | Use rli2 mode. All files must already be sorted. Very low memory usage. |
 | `-f` | Use a file-backed Berkeley DB instead of memory. Slower, but supports very large files with limited RAM. |
 | `-l len` | Limit all matching to a specific line length. Requires `-b`, `-2`, or `-f`. |
@@ -109,6 +109,9 @@ This will look in /path/to/names for all files, use gzcat to decompress or acces
 
 `rling -c all-names.txt matching.txt /path/to/names/[a-f]\*`\
 This will read in all-names.txt, then find only names in the input file, and present in one or more of the /path/to/names[a-f] files.  If there are no matching lines, no data is output to matching.txt.
+
+`printf 'apple\nbanana\napple\ncherry\nbanana\ndate\n' | rling stdin stdout`\
+Dedup always keeps the first occurrence of each line and preserves input order.  The output will be `apple`, `banana`, `cherry`, `date` — the second `apple` and `banana` are removed.  This is deterministic: every run produces the same result, and both the default hash mode and `-b` agree on the output.
 
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.
