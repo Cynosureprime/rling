@@ -1,0 +1,8 @@
+*.o
+*.exe
+/rling
+/getpass
+/rehex
+/splitlen
+/dedupe
+.claude/
