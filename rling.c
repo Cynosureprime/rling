@@ -442,14 +442,14 @@ char *Dupe_fn;
 uint64_t Currem_global,Unique_global,Write_global, Occ_global;
 uint64_t Maxdepth_global, Maxlen_global, Minlen_global;
 uint64_t Line_global, HashPrime, HashMask, HashSize;
-int Maxt, Workthread, ProcMode, LenMatch, IsSorted;
+int Maxt, Workthread, ProcMode, LenMatch, IsSorted, DoAnalysis;
 
 char *Modes[] = {
 	"Hash (no switch, default mode)",
 	"Binary search (-b)",
 	"File with Binary search (-f)",
 	"Sorted lists (-2)",
-	"Analysis mode (-q)"
+	"Analysis mode (-q)",
 };
 
 
@@ -2313,9 +2313,7 @@ errexit:
 		}
 		break;
 	    case 'q':
-		if (ProcMode) 
-		    fprintf(stderr,"Mode was %s, is now %s\n",Modes[ProcMode],Modes[4]);
-		ProcMode = 4;
+		DoAnalysis = 1;
 		qopts = strdup(optarg);
 		y = 0;
 		for (x=0; x <strlen(qopts); x++) {
@@ -2447,6 +2445,12 @@ errexit:
 	fprintf(stderr,"Length matching requires -b, -2 or -f modes, so set to -b\n");
     }
 
+    if (DoAnalysis && ProcMode == 0) {
+	ProcMode = 1;
+    }
+    if (DoAnalysis && ProcMode == 3) {
+	ProcMode = 1;
+    }
 
     if (ErrCheck) {
         for (x=2; x<argc; x++) {
@@ -2801,7 +2805,7 @@ errexit:
 	      filesize +
 	      Line * sizeof(char **);
 
-    if (ProcMode == 4)
+    if (DoAnalysis)
 	memsize += Line * sizeof(struct Freq);
 
     if (ProcMode == 0) {
@@ -2892,7 +2896,6 @@ errexit:
 
     	case 1:
     	case 2:
-	case 4:
 	    fprintf(stderr,"Sorting...");fflush(stderr);
 	    WorkUnitLine = Line / Maxt;
 	    if (WorkUnitLine < LINELIMIT)
@@ -2904,7 +2907,7 @@ errexit:
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
 	    fprintf(stderr," took %.4f seconds\n",wtime);
 	    current_utc_time(&starttime);
-	    if (ProcMode == 4) {
+	    if (DoAnalysis) {
 		Freq = calloc(Line,sizeof(struct Freq));
 		if (!Freq) {
 		    fprintf(stderr,"Could not allocate memory for frequency table\n");
@@ -2916,7 +2919,7 @@ errexit:
 	    thisline = Sortlist[0];
 	    Unique_global = Line;
 	    Currem = 0;
-	    if (Dedupe || ProcMode == 4) {
+	    if (Dedupe || DoAnalysis) {
 		Histogram = NULL;
 		if (Maxlen_global < 1000000) {
 		    Histogram = calloc(Maxlen_global+4,sizeof(uint64_t));
@@ -2925,7 +2928,7 @@ errexit:
 		    }
 		}
 
-		fprintf(stderr,"%s",(ProcMode == 4) ? "Analyzing:     ":"De-duplicating:     ");fflush(stderr);
+		fprintf(stderr,"%s",(DoAnalysis) ? "Analyzing:     ":"De-duplicating:     ");fflush(stderr);
 		Unique_global = Currem_global = 0;
 		work = 0;
 		while (work < Line) {
@@ -2936,7 +2939,7 @@ errexit:
 		    if (FreeHead == NULL) FreeTail = &FreeHead;
 		    twist(FreeWaiting, BY, -1);
 		    job->next = NULL;
-		    if (ProcMode == 4)
+		    if (DoAnalysis)
 			job->func = JOB_FANAL;
 		    else
 			job->func = JOB_DEDUPE;
@@ -2959,7 +2962,7 @@ errexit:
 		possess(FreeWaiting);
 		wait_for(FreeWaiting,TO_BE,Maxt);
 		release(FreeWaiting);
-		if (ProcMode == 4) {
+		if (DoAnalysis) {
 		    fprintf(stderr,"\rFrequency:      ");fflush(stderr);
 		    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
 		    qsort_mt(Freq,Line,sizeof(struct Freq),comp5,Maxt,forkelem);
@@ -2983,7 +2986,7 @@ errexit:
 
     Totrem = 0;
     if (argc > 2) {
-	if (ProcMode == 4)
+	if (DoAnalysis)
 	    fprintf(stderr,"Comparing records in \"%s\" against other files ...\n",argv[0]);
 	else if (DoCommon)
 	    fprintf(stderr,"Checking for common records in \"%s\" found in other files ...\n",argv[0]);
@@ -3032,7 +3035,6 @@ errexit:
 			break;
 		    case 1:
 		    case 2:
-		    case 4:
 			job->func = JOB_SEARCH;
 			break;
 		    default:
@@ -3074,7 +3076,7 @@ errexit:
 	wait_for(FreeWaiting, TO_BE, Maxt);
 	release(FreeWaiting);
 	possess(Currem_lock);
-	if (ProcMode == 4)
+	if (DoAnalysis)
 	    fprintf(stderr,"%"PRIu64" matched\n",(uint64_t)Currem_global);
 	else
 	    fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
@@ -3086,7 +3088,7 @@ errexit:
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
     wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-    if (ProcMode == 4)
+    if (DoAnalysis)
 	fprintf(stderr,"\n%s total line%s matched in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",wtime);
     else
 	fprintf(stderr,"\n%s total line%s %s in %.4f seconds\n",commify(Totrem),(Totrem==1)?"":"s",(DoCommon)?"in common":"removed",wtime);
@@ -3126,7 +3128,7 @@ errexit:
 	fatal_exit();
     }
     Currem = 0;
-    if (ProcMode == 4) {
+    if (DoAnalysis) {
 	fprintf(stderr,"Input file had %s lines, with lengths from %"PRIu64" to %"PRIu64"\n",commify(Line),Minlen_global,Maxlen_global);
 	fprintf(stderr,"Writing analysis to \"%s\"\n",argv[1]);
 	writeanal(fo,argv[1],qopts,Line);
