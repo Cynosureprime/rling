@@ -2593,7 +2593,7 @@ errexit:
 
 	fprintf(stderr,"Reading \"%s\"... %"PRIu64" bytes total in %.4f seconds\n",argv[0],filesize,wtime);
     } else {
-	fprintf(stderr,"Reading \"%s\"...",argv[0]);fflush(stderr);
+	fprintf(stderr,"Reading \"%s\"...    ",argv[0]);fflush(stderr);
 	if (fstat(fileno(fin),&statb)) {
 		fprintf(stderr,"Could not stat input file.  This is probably not good news\n");
 		perror(argv[0]);
@@ -2606,16 +2606,30 @@ errexit:
 	        fprintf(stderr,"File \"%s\" claimed to be a regular file of size %"PRIu64"\nbut not enough memory was available.  Make more memory available, or check file.\n",argv[0],filesize);
 		exit (1);
 	    }
-	    readsize = fread(Fileinmem,1,filesize,fin);
-	    if (readsize < filesize) {
-	        if (readsize < 0) {
-		   fprintf(stderr,"Read error on input file.\n");
-		   perror(argv[0]);
-		   fatal_exit();
+	    {
+		uint64_t totalread = 0;
+		int lastp = -1, progress;
+		while (totalread < filesize) {
+		    uint64_t chunk = filesize - totalread;
+		    if (chunk > MAXCHUNK) chunk = MAXCHUNK;
+		    readsize = fread(&Fileinmem[totalread], 1, chunk, fin);
+		    if (readsize <= 0) {
+			if (readsize < 0) {
+			    fprintf(stderr,"Read error on input file.\n");
+			    perror(argv[0]);
+			    fatal_exit();
+			}
+			break;
+		    }
+		    totalread += readsize;
+		    progress = (int)((totalread * 100) / filesize);
+		    if (progress != lastp) {
+			lastp = progress;
+			fprintf(stderr,"%c%c%c%c%3d%%",8,8,8,8,progress);fflush(stderr);
+		    }
 		}
-		if (readsize < filesize) { 
-		    filesize = readsize;
-		}
+		if (totalread < filesize)
+		    filesize = totalread;
 	    }
 	} else {
 	    Fileinmem = malloc(MAXCHUNK + 16);
