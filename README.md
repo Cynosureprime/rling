@@ -7,8 +7,10 @@
 * [General info](#general-info)
 * [Technologies](#technologies)
 * [Setup](#setup)
-* [Features](#features)
+* [Usage](#usage)
+* [Options](#options)
 * [Examples](#examples)
+* [Features](#features)
 * [Status](#status)
 * [Inspiration](#inspiration)
 * [Contact](#contact)
@@ -54,6 +56,42 @@ There was PowerPC specific altivec code, which has been removed (for now) as the
 * 64-bit systems are pretty much essential\
 While it may be possible to re-write portions of the code to run on 32-bit systems, it's probably going to hurt quite a bit.  Let me know if you do end up porting it to 32 bit, and why you think it was a good plan.
 
+## Usage
+
+```
+rling [options] input output [remfile1 remfile2 ...]
+```
+
+| Argument | Description |
+| -------- | ----------- |
+| `input` | The input file to read. Use `stdin` to read from standard input. |
+| `output` | The output file to write. Use `stdout` to write to standard output. |
+| `remfile` | One or more files whose lines will be removed from the input. |
+
+## Options
+
+| Option | Description |
+| ------ | ----------- |
+| `-i` | Ignore missing or inaccessible files on the remove list instead of aborting. |
+| `-d` | Remove duplicate lines from input (on by default). |
+| `-D file` | Write duplicate lines to `file`. |
+| `-n` | Do **not** remove duplicate lines from input. |
+| `-c` | Output only lines **common** to both the input and the remove files. |
+| `-s` | Sort output. Default is to preserve input order. Sorting makes `-b` and `-f` substantially faster. |
+| `-t number` | Number of threads to use (default: all available cores). |
+| `-p prime` | Force the hash table to a specific size. A power-of-two value uses shift-and-mask instead of modulo. |
+| `-b` | Use binary search instead of hashing. Slower, but uses roughly half the memory. |
+| `-2` | Use rli2 mode. All files must already be sorted. Very low memory usage. |
+| `-f` | Use a file-backed Berkeley DB instead of memory. Slower, but supports very large files with limited RAM. |
+| `-l len` | Limit all matching to a specific line length. Requires `-b`, `-2`, or `-f`. |
+| `-M memsize` | Maximum memory for `-f` mode cache (e.g., `-M 4g`). |
+| `-T path` | Directory to store temporary files in (default: current directory). |
+| `-q [cahwsl]` | Frequency analysis on input. Flags: `a` all, `c` count, `h` histogram, `w` word, `l` length, `s` running statistics. Additional files on the command line will be matched against the input. |
+| `-v` | Verbose mode. Displays timing for each section of the program. |
+| `-h` | Display help. |
+
+`stdin` and `stdout` can be used in place of any filename.
+
 ## Examples
 There are many common, and not so common uses for rling.\
 `rling big-file.txt new-file.txt /path/to/old-file.txt /path/to/others/*`\
@@ -75,15 +113,6 @@ This will read in all-names.txt, then find only names in the input file, and pre
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.
 
-There are some "hidden features" in rling.
-* -t [thread count]\
--t allows you to override the default "use all" threads for your hardware platform.  This can be useful if you need to conserve computing resources.  Additionally, sometimes limiting thread count can actually make a process faster - this is usually the case if you are running near the bandwidth of the memory with all threads active.
-* -p [hash prime size]\
--p allows you to override the computed hash list size, and to implement the hash in two ways.  By default, rling selects a "good" hash table size based on a prime number, and uses a modulo operation to index into that table.  If you supply a different value, rling will use that, not caring if it is prime or not.  If you select a value which is an exact power-of-two, however, rling will use shift-and-mask instead of modulo.  This *may* be faster on certain processor types.
-* -v\
--v is a secret "verbose" mode switch to rling.  It displays the run time of each section of the program, so you can understand where all the time is going to.
-* -i\
--i "ignores" errors in the filenames.  By default, rling checks to make sure each filename specified on the command line is accessible.  It does not check to make sure it has read access to the file, nor does it care if it is a real file, or a named pipe, and certainly does not check to see if you have specified the correct input and output names!  -i suppresses these checks, which can be handy if you have files which might appear later, for some reason.
 To-do list:\
 Better portability.
 
