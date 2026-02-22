@@ -105,9 +105,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /home/dlr/src/mdfind/RCS/rling.c,v 1.74 2020/08/24 14:25:43 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.76 2026/02/22 06:12:50 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.76  2026/02/22 06:12:50  dlr
+ * Multiple fixes, added a bunch of new features.
+ *
  * Revision 1.74  2020/08/24 14:25:43  dlr
  * Fix for abort during write when <8 cores are present on system
  *
