@@ -1467,6 +1467,15 @@ MDXALIGN void procjob(void *dummy) {
 			j = 1;
 		    }
 		}
+		// flush final accumulated record
+		Freq[thisnum].key = key;
+		Freq[thisnum].count = j;
+		eol = findeol(key,Fileend - key);
+		if (!eol) eol = Fileend;
+		if (eol > key && eol[-1] == '\r') eol--;
+		llen = eol - key;
+		Freq[thisnum].len = llen;
+		if (Histogram) __sync_fetch_and_add(&Histogram[llen],1);
 		__sync_add_and_fetch(&Currem_global,rem);
 		__sync_add_and_fetch(&Unique_global,unique);
 		break;
@@ -2112,7 +2121,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
     totcumu = 0;
     curperc = cumuperc = 0.0;
     for (x=0; anyvalid && x < Line; x++) {
-	if (Freq[x].key == NULL) break;
+	if (Freq[x].key == NULL) continue;
 	for (l=lopts; (c = *l); l++) {
 	    switch(c) {
 		case 'a':
@@ -2947,7 +2956,7 @@ errexit:
 		    curpos = work + WorkUnitLine;
 		    if (curpos > Line) curpos = Line;
 		    while (curpos >0 && curpos < Line && curpos > work) {
-			if (comp1(&Sortlist[curpos-1],&Sortlist[curpos]) == 0)
+			if (mystrcmp(Sortlist[curpos-1],Sortlist[curpos]) == 0)
 			    curpos++;
 			else
 			    break;
