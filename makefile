@@ -5,8 +5,16 @@
 #ensure you have package libdb-dev installed
 
 #COPTS=-DPOWERPC -maltivec
-COPTS=-DINTEL
 #COPTS=-DPOWERPC -DAIX -maltivec -maix64
+
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_M),x86_64)
+  COPTS=-DINTEL
+else ifeq ($(UNAME_M),i386)
+  COPTS=-DINTEL
+else
+  COPTS=
+endif
 
 all: rling getpass rehex splitlen dedupe
 
