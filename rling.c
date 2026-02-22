@@ -2908,6 +2908,52 @@ errexit:
 	    wait_for(FreeWaiting,TO_BE,Maxt);
 	    release(FreeWaiting);
 
+	    /* Fixup: ensure first occurrence of each line is kept.
+	     * Parallel JOB_GENHASH may keep a later occurrence due to
+	     * CAS timing.  Rebuild hash table in index order so that
+	     * the earliest occurrence always wins.
+	     */
+	    if (Dedupe) {
+		uint64_t fi_idx, fi_j;
+		uint64_t fi_crc;
+		int64_t fi_llen;
+		char *fi_key, *fi_eol;
+		struct Linelist *fi_cur;
+		int fi_found;
+
+		memset(HashLine, 0, sizeof(struct Linelist *) * HashSize);
+		Occ_global = 0;
+		for (fi_idx = 0; fi_idx < Line; fi_idx++) {
+		    fi_key = (char *)((uint64_t)Sortlist[fi_idx] & 0x7fffffffffffffffL);
+		    fi_eol = findeol(fi_key, Fileend - fi_key);
+		    if (!fi_eol) fi_eol = (char *)Fileend;
+		    if (fi_eol > fi_key && fi_eol[-1] == '\r') fi_eol--;
+		    fi_llen = fi_eol - fi_key;
+		    fi_crc = XXH3_64bits(fi_key, fi_llen);
+		    if (HashMask)
+			fi_j = fi_crc & HashMask;
+		    else
+			fi_j = fi_crc % HashPrime;
+		    fi_found = 0;
+		    for (fi_cur = HashLine[fi_j]; fi_cur; fi_cur = fi_cur->next) {
+			if (comp2(fi_key, &Sortlist[fi_cur - Linel]) == 0) {
+			    fi_found = 1;
+			    break;
+			}
+		    }
+		    if (fi_found) {
+			/* Later occurrence — mark deleted */
+			Sortlist[fi_idx] = (char *)((uint64_t)Sortlist[fi_idx] | 0x8000000000000000L);
+		    } else {
+			/* First occurrence — ensure alive and insert */
+			Sortlist[fi_idx] = (char *)((uint64_t)Sortlist[fi_idx] & 0x7fffffffffffffffL);
+			Linel[fi_idx].next = HashLine[fi_j];
+			HashLine[fi_j] = &Linel[fi_idx];
+			Occ_global++;
+		    }
+		}
+	    }
+
 	    current_utc_time(&curtime);
 	    wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	    wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
