@@ -2,7 +2,6 @@
 #though it might be possible to compile for 32-bit environment,
 #its not likely to work well.  Use 64 bit operating environments
 #for rling
-#ensure you have package libdb-dev installed
 
 #COPTS=-DPOWERPC -maltivec
 #COPTS=-DPOWERPC -DAIX -maltivec -maix64
@@ -14,6 +13,12 @@ else ifeq ($(UNAME_M),i386)
   COPTS=-DINTEL
 else
   COPTS=
+endif
+
+# GCC needs -fgnu89-inline to emit out-of-line copies of inline functions
+UNAME_S := $(shell uname -s)
+ifneq ($(UNAME_S),Darwin)
+  COPTS += -fgnu89-inline
 endif
 
 all: rling getpass rehex splitlen dedupe
@@ -44,4 +49,4 @@ dedupe: dedupe.c
 
 clean:
 	rm -f rling getpass rehex splitlen dedupe
-	rm -f qsort_mt.o rling.o yarn.o
+	rm -f *.o
