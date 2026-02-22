@@ -1,0 +1,117 @@
+# Release workflow: builds rling binaries for macOS, Linux, and Windows
+# on tag push, then creates a GitHub Release with all artifacts attached.
+#
+# Automated platforms: macOS Universal, Linux x86_64, Windows x86_64
+#
+# Manual platforms (build and upload after the release is created):
+#
+#   ppc64le (ubpower8):
+#     ssh ubpower8.priv.bungi.com
+#     cd ~/src/mdfind && git pull
+#     cc -O3 -DPOWERPC=1 -pthread -c rling.c yarn.c qsort_mt.c
+#     cc -DPOWERPC=1 -pthread -o rling rling.o yarn.o qsort_mt.o
+#     tar czf rling-linux-ppc64le.tar.gz rling
+#     gh release upload v1.x rling-linux-ppc64le.tar.gz
+#
+#   FreeBSD:
+#     cc -fomit-frame-pointer -pthread -O3 -c rling.c yarn.c qsort_mt.c
+#     cc -pthread -o rling rling.o yarn.o qsort_mt.o
+#     tar czf rling-freebsd-x86_64.tar.gz rling
+#     gh release upload v1.x rling-freebsd-x86_64.tar.gz
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build x86_64
+        run: |
+          cc -arch x86_64 -fomit-frame-pointer -pthread -O3 -c rling.c -o rling_x86_64.o
+          cc -arch x86_64 -fomit-frame-pointer -pthread -O3 -c yarn.c -o yarn_x86_64.o
+          cc -arch x86_64 -fomit-frame-pointer -pthread -O3 -c qsort_mt.c -o qsort_mt_x86_64.o
+          cc -arch x86_64 -pthread -o rling_x86_64 rling_x86_64.o yarn_x86_64.o qsort_mt_x86_64.o
+
+      - name: Build arm64
+        run: |
+          cc -arch arm64 -fomit-frame-pointer -pthread -O3 -c rling.c -o rling_arm64.o
+          cc -arch arm64 -fomit-frame-pointer -pthread -O3 -c yarn.c -o yarn_arm64.o
+          cc -arch arm64 -fomit-frame-pointer -pthread -O3 -c qsort_mt.c -o qsort_mt_arm64.o
+          cc -arch arm64 -pthread -o rling_arm64 rling_arm64.o yarn_arm64.o qsort_mt_arm64.o
+
+      - name: Create universal binary
+        run: |
+          lipo -create rling_x86_64 rling_arm64 -output rling
+          file rling
+          tar czf rling-macos-universal.tar.gz rling
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rling-macos-universal
+          path: rling-macos-universal.tar.gz
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cc -fomit-frame-pointer -fgnu89-inline -pthread -O3 -DINTEL -c rling.c
+          cc -fomit-frame-pointer -fgnu89-inline -pthread -O3 -DINTEL -c yarn.c
+          cc -fomit-frame-pointer -fgnu89-inline -pthread -O3 -DINTEL -c qsort_mt.c
+          cc -DINTEL -pthread -static -o rling rling.o yarn.o qsort_mt.o
+          file rling
+          tar czf rling-linux-x86_64.tar.gz rling
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rling-linux-x86_64
+          path: rling-linux-x86_64.tar.gz
+
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Build
+        run: |
+          x86_64-w64-mingw32-gcc -Iwin32 -fomit-frame-pointer -fgnu89-inline -pthread -O3 -DINTEL -c rling.c
+          x86_64-w64-mingw32-gcc -Iwin32 -fomit-frame-pointer -fgnu89-inline -pthread -O3 -DINTEL -c yarn.c
+          x86_64-w64-mingw32-gcc -Iwin32 -fomit-frame-pointer -fgnu89-inline -pthread -O3 -DINTEL -c qsort_mt.c
+          x86_64-w64-mingw32-gcc -DINTEL -pthread -static -o rling.exe rling.o yarn.o qsort_mt.o
+          file rling.exe
+          zip rling-windows-x86_64.zip rling.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rling-windows-x86_64
+          path: rling-windows-x86_64.zip
+
+  release:
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/rling-macos-universal/rling-macos-universal.tar.gz
+            artifacts/rling-linux-x86_64/rling-linux-x86_64.tar.gz
+            artifacts/rling-windows-x86_64/rling-windows-x86_64.zip
