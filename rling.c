@@ -3042,6 +3042,7 @@ errexit:
 	    continue;
 	}
 	while ((Linecount = cacheline(fi,&readbuf,&readindex))) {
+	    if (Unique_global <= Totrem + Currem_global) break;
 	    numline = (Linecount / Maxt);
 	    if (numline < Maxt) numline = Linecount;
 	    for (curline = 0; curline < Linecount; curline += numline) {
@@ -3106,7 +3107,12 @@ errexit:
 	Totrem += Currem_global;
 	release(Currem_lock);
 	fclose(fi);
-	if (Unique_global <= Totrem) break;
+	if (Unique_global <= Totrem) {
+	    if (x+1 < argc)
+		fprintf(stderr,"All target lines removed, skipping %d remaining file%s\n",
+		    argc-x-1, (argc-x-1)==1?"":"s");
+	    break;
+	}
     }
     current_utc_time(&curtime);
     wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
