@@ -513,6 +513,7 @@ struct Linelist {
 struct Linelist **HashLine;
 
 
+struct timespec inittime;
 int Dedupe = 1;
 int DoCommon = 0, SortOut = 0;
 uint64_t *Common, *Bloom;
@@ -567,6 +568,16 @@ void current_utc_time(struct timespec *ts) {
 #else
     clock_gettime(CLOCK_REALTIME, ts);
 #endif
+}
+
+void fatal_exit(void) {
+    struct timespec curtime;
+    double wtime;
+    current_utc_time(&curtime);
+    wtime = (double)curtime.tv_sec + (double)(curtime.tv_nsec) / 1000000000.0;
+    wtime -= (double)inittime.tv_sec + (double)(inittime.tv_nsec) / 1000000000.0;
+    fprintf(stderr, "Total runtime %.4f seconds\n", wtime);
+    exit(1);
 }
 
 /*
@@ -652,7 +663,7 @@ void Write_dupe(char *line, uint64_t len) {
     if (fwrite(line,llen,1,Dupe_fo) != 1) {
         fprintf(stderr,"Writing duplicates file failed.  Disk full?\n");
 	perror(Dupe_fn);
-	exit(1);
+	fatal_exit();
     }
     release(Dupe_lock);
 }
@@ -923,7 +934,7 @@ MDXALIGN void procjob(void *dummy) {
 	job = WorkHead;
 	if (!job || job->func == 0) {
 	    fprintf(stderr,"Job null - exiting\n");
-	    exit(1);
+	    fatal_exit();
 	}
 	if (job->func == JOB_DONE) {
 	    release(WorkWaiting);
@@ -1258,7 +1269,7 @@ MDXALIGN void procjob(void *dummy) {
 			    if (twrite && fwrite(job->writeindex,twrite,1,job->fo) != 1) {
 				fprintf(stderr,"Write error. Disk full?\n");
 				perror(job->fn);
-				exit(1);
+				fatal_exit();
 			    }
 			    release(Common_lock);
 			    twrite = 0;
@@ -1270,7 +1281,7 @@ MDXALIGN void procjob(void *dummy) {
 			    if (fwrite(key,llen,1,job->fo) != 1 || fwrite("\n",1,1,job->fo) != 1) {
 				fprintf(stderr,"Write error. Disk full?\n");
 				perror(job->fn);
-				exit(1);
+				fatal_exit();
 			    }
 			    release(Common_lock);
 			    continue;
@@ -1285,7 +1296,7 @@ MDXALIGN void procjob(void *dummy) {
 		    if (twrite && fwrite(job->writeindex,twrite,1,job->fo) != 1) {
 			fprintf(stderr,"Write error. Disk full?\n");
 			perror(job->fn);
-			exit(1);
+			fatal_exit();
 		    }
 		} else {
 		    for (index=job->start;index < job->end; index++) {
@@ -1313,7 +1324,7 @@ MDXALIGN void procjob(void *dummy) {
 		    if ((newline-key) && fwrite(key,newline-key,1,job->fo) != 1) {
 			fprintf(stderr,"Write error. Disk full?\n");
 			perror(job->fn);
-			exit(1);
+			fatal_exit();
 		    }
 		}
 		fflush(job->fo);
@@ -1353,7 +1364,7 @@ MDXALIGN void procjob(void *dummy) {
 
 	    default:
 	        fprintf(stderr,"Unknown job function: %d\n",job->func);
-		exit(1);
+		fatal_exit();
 	}
 	job->func = 0;
 	possess(FreeWaiting);
@@ -1671,14 +1682,14 @@ void getnextline(struct Infiles *infile) {
 		fprintf(stderr,"Line %"PRIu64" in \"%s\" is too long at %"PRIu64"\n",infile->line,infile->fn,infile->curlen);
 		fprintf(stderr,"Increase the memory available using -M\n");
 		fprintf(stderr,"Memory is set to %"PRIu64", so try -M %"PRIu64"\n",MaxMem, 2*MaxMem);
-		exit(1);
+		fatal_exit();
 	    }
 	    res = mylstrcmp(lastline,infile->curline);
 	    if (res > 0) {
 		fprintf(stderr,"File \"%s\" is not in sorted order at line %"PRIu64"\n",infile->fn,infile->line);
 		fprintf(stderr,"Line %"PRIu64": ",infile->line-1);prstr(lastline,lastlen);
 		fprintf(stderr,"Line %"PRIu64": ",infile->line);prstr(infile->curline,infile->curlen);
-		exit(1);
+		fatal_exit();
 	    }
 	    if (res ==0) {
 		infile->dup++;
@@ -1700,13 +1711,13 @@ void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
     if (len > outfile->size) {
         fprintf(stderr,"You tried to write %"PRIu64" bytes, but the buffer size is %"PRIu64"\n",(uint64_t)len,(uint64_t)outfile->size);
 	fprintf(stderr,"Use -M option to make the buffers bigger\n");
-	exit(1);
+	fatal_exit();
     }
     if (outfile->curpos+len > outfile->size || buf == NULL) {
 	if (outfile->curpos && fwrite(outfile->Buffer,outfile->curpos,1,outfile->fi) != 1) {
 	    fprintf(stderr,"Write error. Disk full?\n");
 	    perror(outfile->fn);
-	    exit(1);
+	    fatal_exit();
 	}
 	outfile->curpos = 0;
     }
@@ -1775,7 +1786,7 @@ void rli2(int argc, char **argv) {
     heap = calloc(sizeof(struct InHeap),heapcnt+1);
     if (!Infile || !heap) {
 	fprintf(stderr,"Out of memory initializing structures\n");
-	exit(1);
+	fatal_exit();
     }
     if (heapcnt == 0) {
        nullfile.fi =NULL;
@@ -1796,7 +1807,7 @@ void rli2(int argc, char **argv) {
 	memsize += lsize+16;
 	if (!Infile[x].Buffer) {
 	    fprintf(stderr,"Could not allocate %"PRIu64" bytes for I/O buffer\n",(uint64_t)lsize);
-	    exit(1);
+	    fatal_exit();
 	}
 	Infile[x].fn = argv[x];
 	if (x == 1) {
@@ -1813,7 +1824,7 @@ void rli2(int argc, char **argv) {
 	if (Infile[x].fi == NULL) {
 	    fprintf(stderr,"Can't open \"%s\"\n",argv[x]);
 	    perror(argv[x]);
-	    exit(1);
+	    fatal_exit();
 	}
 	if (x != 1) {
 	    Infile[x].end = fread(Infile[x].Buffer,1,lsize,Infile[x].fi);
@@ -1838,7 +1849,7 @@ void rli2(int argc, char **argv) {
 		fprintf(stderr,"Line %"PRIu64" in \"%s\" is too long at %"PRIu64"\n",Infile[x].line,Infile[x].fn,Infile[x].curlen);
 		fprintf(stderr,"Increase the memory available using -M\n");
 		fprintf(stderr,"Memory is set to %"PRIu64", so try -M %"PRIu64"\n",MaxMem, 2*MaxMem);
-		exit(1);
+		fatal_exit();
 	    }
 	}
 	if (x>1) {
@@ -1941,7 +1952,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
     lopts = strdup(qopts);
     if (!lopts) {
 	fprintf(stderr,"Fatal memory allocation error\n");
-	exit(1);
+	fatal_exit();
     }
     l = lopts;
 
@@ -2021,7 +2032,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	if (ferror(fo)) {
 	    fprintf(stderr,"Write error on \"%s\". Disk full?\n",fn);
 	    perror(fn);
-	    exit(1);
+	    fatal_exit();
 	}
     }
 
@@ -2035,7 +2046,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	lhist = calloc(y+4,sizeof(struct lhist));
 	if (!lhist) {
 	    fprintf(stderr,"Histogram memory allocation failed for %"PRIu64" entries\n",y);
-	    exit(1);
+	    fatal_exit();
 	}
 	totcount = 0;
 	for (y=x=0; x <=Maxlen_global; x++) {
@@ -2063,7 +2074,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	if (ferror(fo)) {
 	    fprintf(stderr,"Write error on \"%s\". Disk full?\n",fn);
 	    perror(fn);
-	    exit(1);
+	    fatal_exit();
 	}
     }
 }
@@ -2080,7 +2091,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
  */
 
 int main(int argc, char **argv) {
-    struct timespec starttime,curtime, inittime;
+    struct timespec starttime,curtime;
     double wtime;
     int64_t llen;
     uint64_t Line, Estline,  RC, Totrem;
@@ -2159,7 +2170,7 @@ errexit:
 		fprintf(stderr,"\t\t\tAdditional files will be matched against input files\n");
 		fprintf(stderr,"\t-h\t\tThis help\n");
 		fprintf(stderr,"\n\tstdin and stdout can be used in the place of any filename\n");
-		exit(1);
+		fatal_exit();
 		break;
 
 	    case 'b':
@@ -2188,7 +2199,7 @@ errexit:
 		LenMatch = atoi(optarg);
 		if (LenMatch <= 0) {
 		    fprintf(stderr,"Length to match must be positive, not %d\n",LenMatch);
-		    exit(1);
+		    fatal_exit();
 		}
 		break;
 	    case 'q':
@@ -2203,7 +2214,7 @@ errexit:
 		}
 		if (y == 0) {
 		    fprintf(stderr,"No valid -q options.  Please use \"-q a\" for all options, or select one or\nmore of cahwl\n");
-		    exit(1);
+		    fatal_exit();
 		}
 		break;
 
@@ -2228,7 +2239,7 @@ errexit:
 		HashOpt = atoi(optarg);
 		if (HashOpt <= 0) {
 		    fprintf(stderr,"Hash prime must be positive value\n");
-		    exit(1);
+		    fatal_exit();
 		}
 	        break;
 
@@ -2263,7 +2274,7 @@ errexit:
 		linein = malloc(MaxMem);
 		if (!linein) {
 		    fprintf(stderr,"but allocation for that much failed.  Try using a smaller amount\n");
-		    exit(1);
+		    fatal_exit();
 		}
 		free(linein);
 		break;
@@ -2274,7 +2285,7 @@ errexit:
 		if (!Dupe_fo) {
 		    fprintf(stderr,"Could not open output file for duplicate lines\n");
 		    perror(optarg);
-		    exit(1);
+		    fatal_exit();
 		}
 		Dupe_fn = strdup(optarg);
 		break;
@@ -2282,7 +2293,7 @@ errexit:
 	    case 'T':
 	        if (strlen(optarg) > MDXMAXPATHLEN) {
 		    fprintf(stderr,"The path is too long - make it shorter.\n");
-		    exit(1);
+		    fatal_exit();
 		}
 		strcpy(TempPath,optarg);
 		fprintf(stderr,"Temporary file path: %s\n",TempPath);
@@ -2291,7 +2302,7 @@ errexit:
 	        x = atoi(optarg);
 		if (x < 1 || x > 32768) {
 		    fprintf(stderr,"Maximum threads invalid: %d\n",x);
-		    exit(1);
+		    fatal_exit();
 		}
 		fprintf(stderr,"Maximum number of threads was %d, now %d\n",Maxt,x);
 		Maxt = x;
@@ -2321,7 +2332,7 @@ errexit:
 		continue;
 	    if (stat(argv[x],&sb1)) {
 		fprintf(stderr,"File \"%s\" not found.  Aborting (see -i option)\n",argv[x]);
-		exit(1);
+		fatal_exit();
 	    }
 	}
     }
@@ -2347,7 +2358,7 @@ errexit:
     if (!Readbuf || !Readindex || !WUList || !Jobs || !FreeWaiting || !WorkWaiting || !WUWaiting || !Currem_lock || !ReadBuf0 || !ReadBuf1 || !Common_lock || !Dupe_lock) {
 	fprintf(stderr,"Can't allocate space for jobs\n");
 	fprintf(stderr,"This means that you don't have enough memory available to even\nstart processing.  Please make more memory available.\n");
-	exit(1);
+	fatal_exit();
     }
     WorkTail = &WorkHead;
     FreeTail = &FreeHead;
@@ -2356,7 +2367,7 @@ errexit:
     y = ((MAXCHUNK)/Maxt);
     if (last < 16 || y < 16) {
 	fprintf(stderr,"MAXCHUNK is set too low - please fix\n");
-	exit(1);
+	fatal_exit();
     }
     WorkUnitSize = last;
     for (work=0,x=0; x<Maxt; x++) {
@@ -2369,7 +2380,7 @@ errexit:
  	WUList[x].wulock = new_lock(0);
 	if (!WUList[x].wulock || WUList[x].Sortlist > (char **)(&Readbuf[MAXCHUNK])) {
 	    fprintf(stderr,"Can't allocate lock for work unit\n");
-	    exit(1);
+	    fatal_exit();
 	}
 	Jobs[x].wu = &WUList[x];
     }
@@ -2385,14 +2396,14 @@ errexit:
     if (!fin) {
 	fprintf(stderr,"Can't open:");
 	perror(argv[0]);
-	exit(1);
+	fatal_exit();
     }
 
     if (ProcMode == 2) {
 	if (fstat(fileno(fin),&statb)) {
 	    fprintf(stderr,"Could not stat input file.  This is probably not good news\n");
 	    perror(argv[0]);
-	    exit(1);
+	    fatal_exit();
 	}
 	if (!(statb.st_mode & S_IFREG)) {
 	    fprintf(stderr,"Input \"%s\" not a regular file. Staging - please wait.\n",argv[0]);
@@ -2402,7 +2413,7 @@ errexit:
 	    if (!fo) {
 		fprintf(stderr,"Could not create temporary file for staging input\n");
 		perror(DBOUT);
-		exit(1);
+		fatal_exit();
 	    }
 	    while (!feof(fin)) {
 		x = fread(Readbuf,1,MAXCHUNK,fin);
@@ -2410,7 +2421,7 @@ errexit:
 		    if (fwrite(Readbuf,x,1,fo) != 1) {
 			fprintf(stderr,"Write error. Disk full?\n");
 			perror(DBOUT);
-		        exit(1);
+		        fatal_exit();
 		    }
 	    }
 	    fclose(fin);
@@ -2419,13 +2430,13 @@ errexit:
 	    if (!fin) {
 		fprintf(stderr,"Could not re-open staging file!\n");
 		perror(DBOUT);
-		exit(1);
+		fatal_exit();
 	    }
 	    unlink(DBOUT);
 	    if (fstat(fileno(fin),&statb)) {
 		fprintf(stderr,"Could not stat staging file.  This is probably not good news\n");
 		perror(argv[0]);
-		exit(1);
+		fatal_exit();
 	    }
 	}
 	filesize = Filesize = statb.st_size;
@@ -2437,7 +2448,7 @@ errexit:
 	if (Fileinmem == (char *)-1L) {
 	    fprintf(stderr,"Cannot mmap \"%s\".\n",argv[0]);
 	    perror(argv[0]);
-	    exit(1);
+	    fatal_exit();
 	}
 	Fileend = &Fileinmem[filesize];
 	current_utc_time(&curtime);
@@ -2451,7 +2462,7 @@ errexit:
 	if (fstat(fileno(fin),&statb)) {
 		fprintf(stderr,"Could not stat input file.  This is probably not good news\n");
 		perror(argv[0]);
-		exit(1);
+		fatal_exit();
 	}
 	if ((statb.st_mode & S_IFREG)) {
 	    filesize = statb.st_size;
@@ -2465,7 +2476,7 @@ errexit:
 	        if (readsize < 0) {
 		   fprintf(stderr,"Read error on input file.\n");
 		   perror(argv[0]);
-		   exit(1);
+		   fatal_exit();
 		}
 		if (readsize < filesize) { 
 		    filesize = readsize;
@@ -2487,7 +2498,7 @@ errexit:
 	    if (!Fileinmem) {
 		fprintf(stderr,"Can't get %"PRIu64" more bytes for read buffer\n",(uint64_t)MAXCHUNK);
 		fprintf(stderr,"This means that part (%"PRIu64" bytes) of the input file\nread ok, but that's not the end of the file.\nMake more memory available, or decrease the size of the input file\n",filesize);
-		exit(1);
+		fatal_exit();
 	    }
 	}
 	current_utc_time(&curtime);
@@ -2500,7 +2511,7 @@ errexit:
 	if (!Fileinmem) {
 	    fprintf(stderr,"Could not shrink memory buffer\n");
 	    fprintf(stderr,"Probably a bug in the program\n");
-	    exit(1);
+	    fatal_exit();
 	}
 	fclose(fin);
 
@@ -2524,7 +2535,7 @@ errexit:
 	if (!vmfile) {
 	    fprintf(stderr,"Cannot create virtual memory file %s\n",DBNAME);
 	    perror(DBNAME);
-	    exit(1);
+	    fatal_exit();
 	}
 	unlink(DBNAME);
 	
@@ -2544,7 +2555,7 @@ errexit:
     if (!Sortlist) {
 	fprintf(stderr,"Can't allocate %s bytes for sortlist\n",commify(Estline*8));
 	fprintf(stderr,"All %"PRIu64" bytes of the input file read ok, but there is\nno memory left to build the sort table.\nMake more memory available, or decrease the size of the input file\n",filesize);
-	exit(1);
+	fatal_exit();
     }
 
 
@@ -2582,7 +2593,7 @@ errexit:
 		    if (!Sortlist) {
 			fprintf(stderr,"Could not re-allocate for Sortlist\n");
 			fprintf(stderr,"This means we read all %"PRIu64"bytes of the input file\nbut we ran out of memory allocating for the sort list\nMake more memory available, or decrease the size of the input file\n",filesize);
-			exit(1);
+			fatal_exit();
 		    }
 		}
 		if (wu->count) {
@@ -2631,7 +2642,7 @@ errexit:
     if (!Sortlist) {
 	fprintf(stderr,"Final Sortlist shrink failed\n");
 	fprintf(stderr,"This means we read all %"PRIu64" bytes of the input file,\nand were able to create the sortlist for all %"PRIu64" lines we found\nLikely, there is a bug in the program\n",filesize,Line);
-	exit(1);
+	fatal_exit();
     }
     Sortlist[Line] = NULL;
     current_utc_time(&curtime);
@@ -2645,7 +2656,7 @@ errexit:
 	if (!Common || !Common_lock) {
 	    fprintf(stderr,"Could not allocate space for common array\n");
 	    fprintf(stderr,"Make more memory available, or reduce size of input file\n");
-	    exit(1);
+	    fatal_exit();
 	}
     }
 
@@ -2659,7 +2670,7 @@ errexit:
     Hidebit = (RC & (1LL<<63)) ? 0 : 1;
     if (Hidebit == 0) {
 	fprintf(stderr,"Can't hide the bit\n");
-	exit(1);
+	fatal_exit();
     }
     memsize = MAXCHUNK +
 	      MAXLINEPERCHUNK*2*sizeof(struct LineInfo)+32;
@@ -2715,7 +2726,7 @@ errexit:
 	    if (!HashLine ||  !Linel) {
 		fprintf(stderr,"Can't allocate processing space for lines\n");
 		fprintf(stderr,"Make more memory available, or consider using -b option.\n");
-		exit(1);
+		fatal_exit();
 	    }
 
 	    Currem = 0;
@@ -2776,7 +2787,7 @@ errexit:
 		if (!Freq) {
 		    fprintf(stderr,"Could not allocate memory for frequency table\n");
 		    fprintf(stderr,"Make more memory available, or reduce the list size\n");
-		    exit(1);
+		    fatal_exit();
 		}
 		FreqSize = 0;
 	    }
@@ -2845,7 +2856,7 @@ errexit:
 
 	default:
 	    fprintf(stderr,"Unknown ProcMode=%d\n",ProcMode);
-	    exit(1);
+	    fatal_exit();
     }
 
     Totrem = 0;
@@ -2899,7 +2910,7 @@ errexit:
 			break;
 		    default:
 		        fprintf(stderr,"Unkown ProcMode=%d\n",ProcMode);
-			exit(1);
+			fatal_exit();
 		}
 		job->start = 0;
 		job->end = Line;
@@ -2985,7 +2996,7 @@ errexit:
     if (!fo) {
 	fprintf(stderr,"Can't create: ");
 	perror(argv[1]);
-	exit(1);
+	fatal_exit();
     }
     Currem = 0;
     if (ProcMode == 4) {
@@ -3023,7 +3034,7 @@ errexit:
 	 	Jobs = calloc(8,sizeof(struct JOB));
 		if (!Jobs) { 
 		    fprintf(stderr,"Not enough memory to allocate a few bytes for structures to write\nMake more memory available.\n");
-		    exit(1);
+		    fatal_exit();
 		}
 	    }
 	    Maxt = 8;
