@@ -349,7 +349,7 @@ extern int optreset;
 #include <xmmintrin.h>
 #endif
 
-extern void qsort_mt();
+extern void qsort_mt(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *), int maxthreads, int forkelem);
 
 
 /* After LINELIMIT lines, threads kick in */
@@ -2860,16 +2860,21 @@ errexit:
     }
 
     Totrem = 0;
+    if (argc > 2) {
+	if (ProcMode == 4)
+	    fprintf(stderr,"Comparing records in \"%s\" against other files ...\n",argv[0]);
+	else if (DoCommon)
+	    fprintf(stderr,"Checking for common records in \"%s\" found in other files ...\n",argv[0]);
+	else
+	    fprintf(stderr,"Removing records from \"%s\" when found in other files ...\n",argv[0]);
+    }
     for (x=2; x < argc; x++) {
 	Currem_global = 0;
 	if (strcmp(argv[0],argv[x]) == 0) {
 	    fprintf(stderr,"Skipping \"%s\" because it is the same as the input file\n",argv[x]);
 	    continue;
 	}
-	if (ProcMode == 4)
-	    fprintf(stderr,"Comparing from \"%s\"... ",argv[x]);
-	else
-	    fprintf(stderr,"%s from \"%s\"... ",(DoCommon)?"Checking common":"Removing",argv[x]);
+	fprintf(stderr,"Reading \"%s\"... ",argv[x]);
 	fflush(stderr);
 	stat(argv[x],&sb1);
 	if (sb1.st_mode & S_IFDIR) {
