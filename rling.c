@@ -1952,7 +1952,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 		dohist = 1;
 		break;
 	    case 'a':
-		fprintf(fo,"%*s %*s %s",ccol,"Count",lcol,"Length","Line");
+		fprintf(fo,"Count\tLength\tLine");
 		dohist = 1;
 		anyvalid = 1;
 		*l++ = c;
@@ -1960,14 +1960,14 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	    case 'c':
 		if (t[1] == '-' || isdigit(t[1]))
 		    ccol = atoi(&t[1]);
-		fprintf(fo,"%*s ",ccol,"Count");
+		fprintf(fo,"Count\t");
 		anyvalid = 1;
 		*l++ = c;
 		break;
 	    case 'l':
 		if (t[1] == '-' || isdigit(t[1]))
 		    lcol = atoi(&t[1]);
-		fprintf(fo,"%*s ",lcol,"Length");
+		fprintf(fo,"Length\t");
 		anyvalid = 1;
 		*l++ = c;
 		break;
@@ -1979,7 +1979,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 		*l++ = c;
 		break;
 	    case 's':
-		fprintf(fo," Percent   Cumul ");
+		fprintf(fo,"Percent\tCumul\t");
 		*l++ = c;
 	    	break;
 	    default:
@@ -1995,14 +1995,14 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	for (l=lopts; (c = *l); l++) {
 	    switch(c) {
 		case 'a':
-		    fprintf(fo,"%*u %*u ",ccol,Freq[x].count,lcol,Freq[x].len);
+		    fprintf(fo,"%u\t%u\t",Freq[x].count,Freq[x].len);
 		    fwrite(Freq[x].key,Freq[x].len,1,fo);
 		    break;
 		case 'c':
-		    fprintf(fo,"%*u ",ccol,Freq[x].count);
+		    fprintf(fo,"%u\t",Freq[x].count);
 		    break;
 		case 'l':
-		    fprintf(fo,"%*u ",lcol,Freq[x].len);
+		    fprintf(fo,"%u\t",Freq[x].len);
 		    break;
 		case 's':
 		    if (Line) {
@@ -2010,7 +2010,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 			curperc = ((double)Freq[x].count * 100.0)/(double)Line;
 			cumuperc = ((double)totcumu* 100.0)/(double)Line;
 		    }
-		    fprintf(fo," %6.2f%% %6.2f%% ",curperc,cumuperc);
+		    fprintf(fo,"%.2f%%\t%.2f%%\t",curperc,cumuperc);
 		    break;
 		case 'w':
 		    fwrite(Freq[x].key,Freq[x].len,1,fo);
