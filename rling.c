@@ -1,7 +1,9 @@
 #define _LARGEFILE64_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include <unistd.h>
+#ifndef _WIN32
 #include <sys/uio.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -451,7 +453,7 @@ char *Modes[] = {
 };
 
 
-int _dowildcard = -1; /* enable wildcard expansion for Windows */
+/* Wildcard expansion for Windows is handled by expand_wildcards() below */
 
 #ifdef MAXPATHLEN
 #define MDXMAXPATHLEN (MAXPATHLEN)
@@ -708,6 +710,108 @@ int get_nprocs() {
     ZeroMemory(&SysInfo,sizeof(SYSTEM_INFO));
     GetSystemInfo(&SysInfo);
     return SysInfo.dwNumberOfProcessors;
+}
+
+/*
+ * expand_wildcards - expand glob patterns in argv for Windows
+ *
+ * Windows cmd.exe does not expand wildcards before passing args to programs,
+ * so we do it manually using FindFirstFileA/FindNextFileA.
+ * Only args at index >= start are expanded (to skip input/output files).
+ * Returns a new argv array (caller must free), or NULL on allocation failure.
+ * On failure, the caller should fall back to the original argv.
+ */
+static char **expand_wildcards(int argc, char **argv, int start, int *new_argc) {
+    int cap = argc + 64;
+    int count = 0;
+    char **nargv = (char **)malloc(cap * sizeof(char *));
+    if (!nargv) return NULL;
+
+    /* Copy args before start index as-is */
+    for (int i = 0; i < start && i < argc; i++) {
+        nargv[count++] = argv[i];
+    }
+
+    for (int i = start; i < argc; i++) {
+        /* Check if this arg contains wildcard characters */
+        if (!strchr(argv[i], '*') && !strchr(argv[i], '?')) {
+            if (count >= cap) {
+                cap *= 2;
+                char **tmp = (char **)realloc(nargv, cap * sizeof(char *));
+                if (!tmp) { free(nargv); return NULL; }
+                nargv = tmp;
+            }
+            nargv[count++] = argv[i];
+            continue;
+        }
+
+        /* Extract directory prefix from the pattern */
+        char dir[MDXMAXPATHLEN+16];
+        dir[0] = '\0';
+        const char *last_sep = strrchr(argv[i], '/');
+        const char *last_bsep = strrchr(argv[i], '\\');
+        if (last_bsep && (!last_sep || last_bsep > last_sep))
+            last_sep = last_bsep;
+        if (last_sep) {
+            size_t dlen = (size_t)(last_sep - argv[i] + 1);
+            if (dlen >= sizeof(dir)) dlen = sizeof(dir) - 1;
+            memcpy(dir, argv[i], dlen);
+            dir[dlen] = '\0';
+        }
+
+        WIN32_FIND_DATAA fd;
+        HANDLE hFind = FindFirstFileA(argv[i], &fd);
+        if (hFind == INVALID_HANDLE_VALUE) {
+            /* No matches - keep original pattern so downstream reports error */
+            if (count >= cap) {
+                cap *= 2;
+                char **tmp = (char **)realloc(nargv, cap * sizeof(char *));
+                if (!tmp) { free(nargv); return NULL; }
+                nargv = tmp;
+            }
+            nargv[count++] = argv[i];
+            continue;
+        }
+
+        int matched = 0;
+        do {
+            /* Skip directories */
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                continue;
+
+            if (count >= cap) {
+                cap *= 2;
+                char **tmp = (char **)realloc(nargv, cap * sizeof(char *));
+                if (!tmp) { FindClose(hFind); free(nargv); return NULL; }
+                nargv = tmp;
+            }
+
+            /* Allocate full path: dir + filename */
+            size_t dlen = strlen(dir);
+            size_t flen = strlen(fd.cFileName);
+            char *path = (char *)malloc(dlen + flen + 1);
+            if (!path) { FindClose(hFind); free(nargv); return NULL; }
+            memcpy(path, dir, dlen);
+            memcpy(path + dlen, fd.cFileName, flen + 1);
+            nargv[count++] = path;
+            matched++;
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+
+        /* If nothing matched (all were directories), keep original */
+        if (!matched) {
+            if (count >= cap) {
+                cap *= 2;
+                char **tmp = (char **)realloc(nargv, cap * sizeof(char *));
+                if (!tmp) { free(nargv); return NULL; }
+                nargv = tmp;
+            }
+            nargv[count++] = argv[i];
+        }
+    }
+
+    *new_argc = count;
+    return nargv;
 }
 #endif
 
@@ -2314,6 +2418,18 @@ errexit:
     }
     argc -= optind;
     argv += optind;
+
+#ifdef _WIN32
+    /* Expand wildcard patterns in remove-file arguments (index 2+) */
+    {
+        int expanded_argc;
+        char **expanded_argv = expand_wildcards(argc, argv, 2, &expanded_argc);
+        if (expanded_argv) {
+            argc = expanded_argc;
+            argv = expanded_argv;
+        }
+    }
+#endif
 
     if (argc < 2) {
         fprintf(stderr,"Need at least an input and an output file to process.\n");
