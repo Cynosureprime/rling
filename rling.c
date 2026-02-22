@@ -797,7 +797,11 @@ int comp1(const void *a, const void *b) {
     char *b1 = *((char **)b);
     a1 = (char *)((uint64_t)a1 & 0x7fffffffffffffffL);
     b1 = (char *)((uint64_t)b1 & 0x7fffffffffffffffL);
-    return(mystrcmp(a1,b1));
+    int r = mystrcmp(a1,b1);
+    if (r) return(r);
+    if (a1 < b1) return(-1);
+    if (a1 > b1) return(1);
+    return(0);
 }
 /*
  * comp2 compares a key against the (potentially deleted) Sortline[] entry
