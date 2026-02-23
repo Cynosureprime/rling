@@ -105,9 +105,21 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.76 2026/02/22 06:12:50 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.77 2026/02/23 14:51:00 dlr Exp $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.77  2026/02/23 14:51:00  dlr
+ * Fix mode 0 vs mode 1 dedup disagreement (issue #44):
+ * 1. Hash/comparison mismatch for embedded CR characters - comparison functions
+ *    skip \r but hash included it, causing lines differing only in \r to hash
+ *    to different buckets and never be compared. Added hash_line_strip_cr()
+ *    helper that strips \r matching comparison behavior before hashing.
+ * 2. Stale unique/duplicate counters after fixup pass - parallel JOB_GENHASH
+ *    counters were not recalculated after the single-threaded fixup rebuilt
+ *    the hash table. Now sets Unique_global and Currem_global from Occ_global.
+ * 3. Added missing eol > key bounds check in JOB_GENHASH before accessing
+ *    eol[-1] for \r detection, preventing out-of-bounds read on empty lines.
+ *
  * Revision 1.76  2026/02/22 06:12:50  dlr
  * Multiple fixes, added a bunch of new features.
  *
@@ -986,6 +998,37 @@ int comp5(const void *a, const void *b) {
 #endif
 
 /*
+ * hash_line_strip_cr - compute XXH3 hash with \r characters stripped.
+ *
+ * The comparison functions (mystrcmp/mylstrcmp) skip \r characters,
+ * so two lines differing only in embedded \r compare as equal.
+ * The hash must be consistent: lines that compare equal must hash equal.
+ * Fast path (no \r in line) calls XXH3_64bits directly.
+ */
+static uint64_t hash_line_strip_cr(const char *key, int64_t llen) {
+    if (llen <= 0)
+	return XXH3_64bits(key, 0);
+    if (!memchr(key, '\r', llen))
+	return XXH3_64bits(key, llen);
+    /* Strip \r matching comparison behavior: if byte is \r, take next byte */
+    char smallbuf[4096];
+    char *buf = (llen <= (int64_t)sizeof(smallbuf)) ? smallbuf : malloc(llen);
+    const unsigned char *src = (const unsigned char *)key;
+    const unsigned char *end = src + llen;
+    int64_t newlen = 0;
+    unsigned char c;
+    while (src < end) {
+	c = *src++;
+	if (c == '\r' && src < end)
+	    c = *src++;
+	buf[newlen++] = c;
+    }
+    uint64_t hash = XXH3_64bits(buf, newlen);
+    if (buf != smallbuf) free(buf);
+    return hash;
+}
+
+/*
  * procjob is the main processing thread function.  It runs as a separate
  * thread, and up to Maxt threads can be running simultaneously.
  * In most cases, jobs are pulled from the head of the WorkWaiting
@@ -1259,9 +1302,9 @@ MDXALIGN void procjob(void *dummy) {
 			key = Sortlist[index];
 			eol = findeol(key,Fileend-key);
 			if (!eol) eol = Fileend;
-			if (eol[-1] == '\r') eol--;
+			if (eol > key && eol[-1] == '\r') eol--;
 			llen = eol - key;
-			crc =  XXH3_64bits(key,llen);
+			crc = hash_line_strip_cr(key,llen);
 			j = crc & HashMask;
 		        next = &Linel[index];
 		        next->next = HashLine[j];
@@ -1308,9 +1351,9 @@ MDXALIGN void procjob(void *dummy) {
 			key = (char *)((uint64_t)Sortlist[index] & 0x7fffffffffffffffL);
 			eol = findeol(key,Fileend-key);
 			if (!eol) eol = Fileend;
-			if (eol[-1] == '\r') eol--;
+			if (eol > key && eol[-1] == '\r') eol--;
 			llen = eol - key;
-			crc =  XXH3_64bits(key,llen);
+			crc = hash_line_strip_cr(key,llen);
 			j = crc % HashPrime;
 		        next = &Linel[index];
 		        next->next = HashLine[j];
@@ -2932,7 +2975,7 @@ errexit:
 		    if (!fi_eol) fi_eol = (char *)Fileend;
 		    if (fi_eol > fi_key && fi_eol[-1] == '\r') fi_eol--;
 		    fi_llen = fi_eol - fi_key;
-		    fi_crc = XXH3_64bits(fi_key, fi_llen);
+		    fi_crc = hash_line_strip_cr(fi_key, fi_llen);
 		    if (HashMask)
 			fi_j = fi_crc & HashMask;
 		    else
@@ -2955,6 +2998,9 @@ errexit:
 			Occ_global++;
 		    }
 		}
+		/* Recalculate counters — parallel phase counts are stale */
+		Unique_global = Occ_global;
+		Currem_global = Line - Occ_global;
 	    }
 
 	    current_utc_time(&curtime);
