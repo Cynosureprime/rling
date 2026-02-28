@@ -105,9 +105,18 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.77 2026/02/23 14:51:00 dlr Exp $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.79 2026/02/28 14:51:37 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.79  2026/02/28 14:51:37  dlr
+ * Remove spurious revision 1.1 log entry.
+ *
+ * Revision 1.78  2026/02/28 14:50:02  dlr
+ * Improve fixup pass performance for large files (issue #49).
+ * Fix CAS retry loop to check for duplicate matches during retry walk,
+ * preventing double-insert race condition. Replace O(N) full hash table
+ * rebuild with targeted scan that only processes duplicate-marked lines.
+ *
  * Revision 1.77  2026/02/23 14:51:00  dlr
  * Fix mode 0 vs mode 1 dedup disagreement (issue #44):
  * 1. Hash/comparison mismatch for embedded CR characters - comparison functions
@@ -1334,8 +1343,16 @@ MDXALIGN void procjob(void *dummy) {
 			        if (__sync_bool_compare_and_swap(&last->next,next->next,next))
 				break;
 				last = last->next;
+				if (last && ch && comp2(key,&Sortlist[last - Linel]) == 0) {
+				    delflag = 1;
+				    Write_dupe(key,llen);
+				    MarkDeleted(index);
+				    rem++;
+				    break;
+				}
 			    }
-			    unique++;
+			    if (!delflag)
+				unique++;
 			}
 		    }
 		} else {
@@ -1383,8 +1400,16 @@ MDXALIGN void procjob(void *dummy) {
 			        if (__sync_bool_compare_and_swap(&last->next,next->next,next))
 				break;
 				last = last->next;
+				if (last && ch && comp2(key,&Sortlist[last - Linel]) == 0) {
+				    delflag = 1;
+				    Write_dupe(key,llen);
+				    MarkDeleted(index);
+				    rem++;
+				    break;
+				}
 			    }
-			    unique++;
+			    if (!delflag)
+				unique++;
 			}
 		    }
 
@@ -2954,22 +2979,24 @@ errexit:
 	    wait_for(FreeWaiting,TO_BE,Maxt);
 	    release(FreeWaiting);
 
-	    /* Fixup: ensure first occurrence of each line is kept.
-	     * Parallel JOB_GENHASH may keep a later occurrence due to
-	     * CAS timing.  Rebuild hash table in index order so that
-	     * the earliest occurrence always wins.
-	     */
-	    if (Dedupe) {
-		uint64_t fi_idx, fi_j;
+	    if (Dedupe && Currem_global > 0) {
+		/* Targeted fixup: only process lines marked as duplicates.
+		 * The parallel phase correctly identifies duplicates but CAS
+		 * timing may keep a later occurrence instead of the first.
+		 * Walk duplicate entries in index order; if the hash chain
+		 * entry for the same content has a later index, swap so the
+		 * earliest occurrence wins.
+		 */
+		uint64_t fi_idx, fi_j, ht_idx;
 		uint64_t fi_crc;
 		int64_t fi_llen;
 		char *fi_key, *fi_eol;
-		struct Linelist *fi_cur;
-		int fi_found;
+		struct Linelist *fi_cur, *fi_prev;
 
-		memset(HashLine, 0, sizeof(struct Linelist *) * HashSize);
-		Occ_global = 0;
 		for (fi_idx = 0; fi_idx < Line; fi_idx++) {
+		    if (!((uint64_t)Sortlist[fi_idx] & 0x8000000000000000L))
+			continue;
+
 		    fi_key = (char *)((uint64_t)Sortlist[fi_idx] & 0x7fffffffffffffffL);
 		    fi_eol = findeol(fi_key, Fileend - fi_key);
 		    if (!fi_eol) fi_eol = (char *)Fileend;
@@ -2980,27 +3007,24 @@ errexit:
 			fi_j = fi_crc & HashMask;
 		    else
 			fi_j = fi_crc % HashPrime;
-		    fi_found = 0;
-		    for (fi_cur = HashLine[fi_j]; fi_cur; fi_cur = fi_cur->next) {
-			if (comp2(fi_key, &Sortlist[fi_cur - Linel]) == 0) {
-			    fi_found = 1;
+
+		    fi_prev = NULL;
+		    for (fi_cur = HashLine[fi_j]; fi_cur; fi_prev = fi_cur, fi_cur = fi_cur->next) {
+			ht_idx = fi_cur - Linel;
+			if (comp2(fi_key, &Sortlist[ht_idx]) == 0) {
+			    if (ht_idx > fi_idx) {
+				MarkDeleted(ht_idx);
+				Sortlist[fi_idx] = (char *)((uint64_t)Sortlist[fi_idx] & 0x7fffffffffffffffL);
+				Linel[fi_idx].next = fi_cur->next;
+				if (fi_prev)
+				    fi_prev->next = &Linel[fi_idx];
+				else
+				    HashLine[fi_j] = &Linel[fi_idx];
+			    }
 			    break;
 			}
 		    }
-		    if (fi_found) {
-			/* Later occurrence — mark deleted */
-			Sortlist[fi_idx] = (char *)((uint64_t)Sortlist[fi_idx] | 0x8000000000000000L);
-		    } else {
-			/* First occurrence — ensure alive and insert */
-			Sortlist[fi_idx] = (char *)((uint64_t)Sortlist[fi_idx] & 0x7fffffffffffffffL);
-			Linel[fi_idx].next = HashLine[fi_j];
-			HashLine[fi_j] = &Linel[fi_idx];
-			Occ_global++;
-		    }
 		}
-		/* Recalculate counters — parallel phase counts are stale */
-		Unique_global = Occ_global;
-		Currem_global = Line - Occ_global;
 	    }
 
 	    current_utc_time(&curtime);
