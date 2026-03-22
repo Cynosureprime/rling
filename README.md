@@ -45,6 +45,8 @@ If you need to process very large datasets, and don't have enough memory, the -f
 For large files, memory use can still be high.  rling displays the estimated amount of memory to be used as soon as practical after reading the input files.  This can still be "too late" for some use cases - in general, you need at least 2 times the input file size in memory.
 * stdin/stdout/named pipes fully supported\
 Thanks to the "read exactly once, write exactly once" method rling uses for file I/O, stdin/stdout and named pipes can be used in any position that requires a file name.  This is great for creating complex workloads.
+* Transparent gzip support\
+All input and remove files can be gzip-compressed (.gz) — rling detects the format automatically via zlib.  Plain (uncompressed) files work exactly as before with no performance penalty.  Output is always uncompressed.  This eliminates the need to decompress files before processing them.
 
 ## Setup
 There are several precompiled binaries included with the distribution.  If your system is one of these, you are done.  If not, here are some things to watch out for\
@@ -104,8 +106,17 @@ This will read last-names.txt, *not* remove duplicates (-n switch), and use bina
 `rling clean-list.txt clean-list.txt`\
 This will read clean-list.txt, remove all duplicate lines, and re-write it (in original order) back to clean-list.txt.  This use is permitted (maybe not recommended, but permitted), because all of the input file is read into memory prior to opening the output file for writing.  Great if you are short on disk space, too.
 
+`rling big-file.txt.gz deduped.txt`\
+Gzip-compressed input files are handled transparently — no need to decompress first.  This reads `big-file.txt.gz`, deduplicates, and writes plain text to `deduped.txt`.
+
+`rling input.txt cleaned.txt old-data.txt.gz archive/*.gz`\
+Remove files can also be gzip-compressed.  This removes any lines from `input.txt` that appear in `old-data.txt.gz` or any of the compressed files in `archive/`.  Plain and compressed files can be freely mixed.
+
+`rling data.txt.gz /dev/null -q cw`\
+Frequency analysis works on compressed input too.  This produces a count+word frequency table from a compressed file without decompressing it to disk first.
+
 `find /path/to/names -type f -print0 | xargs -0 gzcat | rling stdin stdout | gzip -9 > all-names.txt.gz`\
-This will look in /path/to/names for all files, use gzcat to decompress or access them, pipe the result to rling which will then de-duplicate them all (keeping original order), and then pipe the resultant output to gzip -9 so as to create a new, de-duplicated name-list in compressed format.
+For more complex pipelines, stdin/stdout still work as before.  This example deduplicates across many files via a pipe.
 
 `rling -c all-names.txt matching.txt /path/to/names/[a-f]\*`\
 This will read in all-names.txt, then find only names in the input file, and present in one or more of the /path/to/names[a-f] files.  If there are no matching lines, no data is output to matching.txt.
