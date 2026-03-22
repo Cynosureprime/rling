@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <inttypes.h>
 #include <string.h>
+#include <zlib.h>
 #ifndef _AIX
 #include <getopt.h>
 #endif
@@ -105,9 +106,15 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.79 2026/02/28 14:51:37 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.82 2026/03/22 17:24:36 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.82  2026/03/22 17:24:36  dlr
+ * Add transparent gzip reading: all input/remove files can be .gz compressed. Uses zlib gzopen/gzread/gzeof. Output always plain. Static-linked libz.a.
+ *
+ * Revision 1.81  2026/02/28 16:50:56  dlr
+ * Rename JOB_WRITE to JOB_WRITEOUT to avoid winspool.h collision
+ *
  * Revision 1.79  2026/02/28 14:51:37  dlr
  * Remove spurious revision 1.1 log entry.
  *
@@ -417,7 +424,8 @@ uint64_t *Histogram;
 uint64_t FreqSize;
 
 struct Infiles {
-    FILE *fi;
+    gzFile fi;		/* for read (remove files) — gzopen/gzread */
+    FILE *fo;		/* for write (output file, index 1 only) — fopen/fwrite */
     char *fn;
     uint64_t line;
     char *Buffer;
@@ -448,7 +456,7 @@ struct JOB {
 #define JOB_SEARCH 3
 #define JOB_FINDHASH 4
 #define JOB_GENHASH 5
-#define JOB_WRITE 6
+#define JOB_WRITEOUT 6
 #define JOB_FANAL 7
 #define JOB_DONE 99
 
@@ -1074,7 +1082,7 @@ static uint64_t hash_line_strip_cr(const char *key, int64_t llen) {
  * performance somewhat.  It is a linked list, however, and is searched
  * sequentially.
  *
- * JOB_WRITE finds all non-deleted lines in a given range, and assembles
+ * JOB_WRITEOUT finds all non-deleted lines in a given range, and assembles
  * them as a contiguous memory block, so that a single fwrite() call can
  * write a large block of memory.  The output file is kept in order by
  * having each thread wait-its-turn after the memory block is created,
@@ -1422,7 +1430,7 @@ MDXALIGN void procjob(void *dummy) {
 		__sync_add_and_fetch(&Occ_global, occ);
 		break;
 
-	    case JOB_WRITE:
+	    case JOB_WRITEOUT:
 		unique = 0;
 		thisend = (uint64_t)Fileend;
 		if (DoCommon || (SortOut && !IsSorted) || ProcMode == 2) {
@@ -1652,7 +1660,7 @@ MDXALIGN void filljob(void *dummy) {
  * In practice, I doubt this will affect anyone, but it is something to
  * be aware of
  */
-unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
+unsigned int cacheline(gzFile fi,char **mybuf,struct LineInfo **myindex) {
     char *curpos,*readbuf, *f;
     static unsigned int nextline;
     unsigned int dest, curline,len, Linecount, rlen;
@@ -1690,8 +1698,8 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
     }
     curindex = 0;
     x = 0;
-    while (!feof(fi)) {
-	x = fread(curpos,1,(MAXCHUNK/2)-curcnt-1,fi);
+    while (!gzeof(fi)) {
+	x = gzread(fi,curpos,(MAXCHUNK/2)-curcnt-1);
 	if (x >0) {
 	    f = findeol(curpos,x-1);
 	    if (f) break;
@@ -1718,7 +1726,7 @@ unsigned int cacheline(FILE *fi,char **mybuf,struct LineInfo **myindex) {
 	    curpos[curindex+rlen] = '\n';
 	    curindex += len + 1;
 	} else {
-	    if (feof(fi)) {
+	    if (gzeof(fi)) {
 	        curpos[curcnt] = '\n';
 		rlen = len = (curcnt - curindex);
 		if (rlen < 0) rlen = 0;
@@ -1841,11 +1849,11 @@ void getnextline(struct Infiles *infile) {
 	    infile->curline -= offset;
 	    infile->curpos -= offset;
 	    infile->end -= offset;
-	    len = fread(&infile->Buffer[infile->end],1,infile->size-infile->end,infile->fi);
+	    len = gzread(infile->fi,&infile->Buffer[infile->end],infile->size-infile->end);
 	    infile->end += len;
 	    infile->Buffer[infile->end] = '\n';
 	    if (len == 0)
-		infile->eof = feof(infile->fi);
+		infile->eof = gzeof(infile->fi);
 	    eol = findeol(infile->curline,infile->end - infile->curpos);
 	    if (!eol) {
 		if (infile->end >= infile->curpos)
@@ -1857,7 +1865,7 @@ void getnextline(struct Infiles *infile) {
 	infile->curlen = eol - infile->curline +1;
 	if (infile->curpos >= infile->end) {
 	    infile->curlen = 0;
-	    infile->eof = feof(infile->fi);
+	    infile->eof = gzeof(infile->fi);
 	    return;
 	}
 	infile->line++;
@@ -1866,7 +1874,7 @@ void getnextline(struct Infiles *infile) {
 	    eol[-1] = '\n'; infile->curlen--;
 	}
 	if (infile->curlen == 0)
-	    infile->eof = feof(infile->fi);
+	    infile->eof = gzeof(infile->fi);
 	else {
 	    if (infile->curlen > ((infile->size/2)-5)) {
 		fprintf(stderr,"Line %"PRIu64" in \"%s\" is too long at %"PRIu64"\n",infile->line,infile->fn,infile->curlen);
@@ -1904,7 +1912,7 @@ void rliwrite(struct Infiles *outfile,char *buf, size_t len) {
 	fatal_exit();
     }
     if (outfile->curpos+len > outfile->size || buf == NULL) {
-	if (outfile->curpos && fwrite(outfile->Buffer,outfile->curpos,1,outfile->fi) != 1) {
+	if (outfile->curpos && fwrite(outfile->Buffer,outfile->curpos,1,outfile->fo) != 1) {
 	    fprintf(stderr,"Write error. Disk full?\n");
 	    perror(outfile->fn);
 	    fatal_exit();
@@ -2001,25 +2009,31 @@ void rli2(int argc, char **argv) {
 	}
 	Infile[x].fn = argv[x];
 	if (x == 1) {
+	    /* Output file — plain FILE*, no compression */
 	    if (strcmp(argv[x],"stdout") == 0)
-		Infile[x].fi = stdout;
+		Infile[x].fo = stdout;
 	    else
-		Infile[x].fi = fopen(argv[x],"wb");
+		Infile[x].fo = fopen(argv[x],"wb");
+	    Infile[x].fi = NULL;
 	} else {
+	    /* Remove files — gzFile, transparent gz/plain */
 	    if (strcmp(argv[x],"stdin") == 0)
-		Infile[x].fi = stdin;
+		Infile[x].fi = gzdopen(dup(0), "rb");
 	    else
-		Infile[x].fi = fopen(argv[x],"rb");
+		Infile[x].fi = gzopen(argv[x],"rb");
+	    if (Infile[x].fi) gzbuffer(Infile[x].fi, 128*1024);
+	    Infile[x].fo = NULL;
 	}
-	if (Infile[x].fi == NULL) {
+	if ((x == 1 && Infile[x].fo == NULL) || (x != 1 && Infile[x].fi == NULL)) {
 	    fprintf(stderr,"Can't open \"%s\"\n",argv[x]);
 	    perror(argv[x]);
 	    fatal_exit();
 	}
 	if (x != 1) {
-	    Infile[x].end = fread(Infile[x].Buffer,1,lsize,Infile[x].fi);
+	    Infile[x].end = gzread(Infile[x].fi,Infile[x].Buffer,lsize);
+	    if (Infile[x].end < 0) Infile[x].end = 0;
 	    Infile[x].Buffer[Infile[x].end] = '\n';
-	    if (Infile[x].end == 0) Infile[x].eof = feof(Infile[x].fi);
+	    if (Infile[x].end == 0) Infile[x].eof = gzeof(Infile[x].fi);
 	    Infile[x].curline = Infile[x].Buffer;
 	    eol = findeol(Infile[x].Buffer,Infile[x].end);
 	    if (!eol) eol = &Infile[x].Buffer[Infile[x].end];
@@ -2112,7 +2126,8 @@ void rli2(int argc, char **argv) {
     fprintf(stderr,"Input file \"%s\" complete. %"PRIu64" unique (%"PRIu64" dup lines) read. %.4f seconds elapsed\n",Infile[0].fn,(uint64_t)Infile[0].unique,(uint64_t)Infile[0].dup,wtime);
     fprintf(stderr,"%s total lines written, %"PRIu64" lines %s\n",commify(Write),rem,(DoCommon)?"in common":"removed");
     for (x=0; x < argc; x++) {
-	fclose(Infile[x].fi);
+	if (x == 1 && Infile[x].fo) fclose(Infile[x].fo);
+	else if (Infile[x].fi) gzclose(Infile[x].fi);
     }
 
 }
@@ -2292,7 +2307,8 @@ int main(int argc, char **argv) {
     int curline, numline, Linecount, dbindex;
     char *readbuf;
     struct LineInfo *readindex;
-    FILE *fin, *fi, *fo, *vmfile;
+    gzFile fin, fi;
+    FILE *fo, *vmfile;
     uint64_t crc, memsize, memscale;
     off_t filesize, readsize;
     int HashOpt=0;
@@ -2593,26 +2609,45 @@ errexit:
 
 
     if (strcmp(argv[0],"stdin") == 0) {
-	fin = stdin;
+	fin = gzdopen(dup(0), "rb");
 #ifdef _WIN32
   setmode(0,O_BINARY);
 #endif
     } else
-	fin = fopen(argv[0],"rb");
+	fin = gzopen(argv[0],"rb");
     if (!fin) {
 	fprintf(stderr,"Can't open:");
 	perror(argv[0]);
 	fatal_exit();
     }
+    gzbuffer(fin, 128*1024);
 
     if (ProcMode == 2) {
-	if (fstat(fileno(fin),&statb)) {
+	/* For mmap mode, we need a plain uncompressed file.
+	 * Gzip, pipe, or stdin must be decompressed to a staging file first. */
+	int need_staging = 0;
+	FILE *mmap_fi = NULL;  /* plain FILE* for mmap/fstat */
+
+	if (strcmp(argv[0],"stdin") == 0) {
+	    need_staging = 1;
+	} else if (stat(argv[0],&statb)) {
 	    fprintf(stderr,"Could not stat input file.  This is probably not good news\n");
 	    perror(argv[0]);
 	    fatal_exit();
+	} else if (!(statb.st_mode & S_IFREG)) {
+	    need_staging = 1;
+	} else {
+	    /* Check for gzip magic bytes (0x1f 0x8b) */
+	    FILE *mc = fopen(argv[0],"rb");
+	    if (mc) {
+		unsigned char hdr[2] = {0,0};
+		if (fread(hdr,1,2,mc) == 2 && hdr[0] == 0x1f && hdr[1] == 0x8b)
+		    need_staging = 1;
+		fclose(mc);
+	    }
 	}
-	if (!(statb.st_mode & S_IFREG)) {
-	    fprintf(stderr,"Input \"%s\" not a regular file. Staging - please wait.\n",argv[0]);
+	if (need_staging) {
+	    fprintf(stderr,"Input \"%s\" requires staging. Please wait.\n",argv[0]);
 	    sprintf(DBOUT,"%s/%s%d.db",TempPath,"rlingi",getpid());
 	    unlink(DBOUT);
 	    fo = fopen(DBOUT,"wb");
@@ -2621,8 +2656,8 @@ errexit:
 		perror(DBOUT);
 		fatal_exit();
 	    }
-	    while (!feof(fin)) {
-		x = fread(Readbuf,1,MAXCHUNK,fin);
+	    while (!gzeof(fin)) {
+		x = gzread(fin,Readbuf,MAXCHUNK);
 		if (x > 0)
 		    if (fwrite(Readbuf,x,1,fo) != 1) {
 			fprintf(stderr,"Write error. Disk full?\n");
@@ -2630,26 +2665,38 @@ errexit:
 		        fatal_exit();
 		    }
 	    }
-	    fclose(fin);
+	    gzclose(fin);
 	    fclose(fo);
-	    fin = fopen(DBOUT,"rb");
-	    if (!fin) {
+	    /* Re-open decompressed staging file as plain FILE* for mmap */
+	    mmap_fi = fopen(DBOUT,"rb");
+	    if (!mmap_fi) {
 		fprintf(stderr,"Could not re-open staging file!\n");
 		perror(DBOUT);
 		fatal_exit();
 	    }
-	    unlink(DBOUT);
-	    if (fstat(fileno(fin),&statb)) {
-		fprintf(stderr,"Could not stat staging file.  This is probably not good news\n");
+	    unlink(DBOUT);  /* fd stays open */
+	    fin = NULL;  /* no longer needed */
+	    if (fstat(fileno(mmap_fi),&statb)) {
+		fprintf(stderr,"Could not stat staging file.\n");
+		perror(argv[0]);
+		fatal_exit();
+	    }
+	} else {
+	    /* Plain uncompressed regular file — open as FILE* for mmap */
+	    gzclose(fin);
+	    fin = NULL;
+	    mmap_fi = fopen(argv[0],"rb");
+	    if (fstat(fileno(mmap_fi),&statb)) {
+		fprintf(stderr,"Could not stat input file.\n");
 		perror(argv[0]);
 		fatal_exit();
 	    }
 	}
 	filesize = Filesize = statb.st_size;
 #ifdef MAP_POPULATE
-	Fileinmem = mmap (NULL,Filesize+4096,PROT_READ,MAP_FILE+MAP_PRIVATE+MAP_POPULATE,fileno(fin),0L);
+	Fileinmem = mmap (NULL,Filesize+4096,PROT_READ,MAP_FILE+MAP_PRIVATE+MAP_POPULATE,fileno(mmap_fi),0L);
 #else
-	Fileinmem = mmap (NULL,Filesize+4096,PROT_READ,MAP_FILE+MAP_PRIVATE,fileno(fin),0L);
+	Fileinmem = mmap (NULL,Filesize+4096,PROT_READ,MAP_FILE+MAP_PRIVATE,fileno(mmap_fi),0L);
 #endif
 	if (Fileinmem == (char *)-1L) {
 	    fprintf(stderr,"Cannot mmap \"%s\".\n",argv[0]);
@@ -2665,12 +2712,22 @@ errexit:
 	fprintf(stderr,"Reading \"%s\"... %"PRIu64" bytes total in %.4f seconds\n",argv[0],filesize,wtime);
     } else {
 	fprintf(stderr,"Reading \"%s\"...    ",argv[0]);fflush(stderr);
-	if (fstat(fileno(fin),&statb)) {
-		fprintf(stderr,"Could not stat input file.  This is probably not good news\n");
-		perror(argv[0]);
-		fatal_exit();
+	/* Check if input is a plain regular file (not gzip, not pipe) */
+	int is_plain_regular = 0;
+	if (strcmp(argv[0],"stdin") != 0 && !stat(argv[0],&statb) &&
+	    (statb.st_mode & S_IFREG)) {
+	    /* Check for gzip magic */
+	    FILE *mc = fopen(argv[0],"rb");
+	    if (mc) {
+		unsigned char hdr[2] = {0,0};
+		if (fread(hdr,1,2,mc) == 2 && hdr[0] == 0x1f && hdr[1] == 0x8b)
+		    is_plain_regular = 0;
+		else
+		    is_plain_regular = 1;
+		fclose(mc);
+	    }
 	}
-	if ((statb.st_mode & S_IFREG)) {
+	if (is_plain_regular) {
 	    filesize = statb.st_size;
 	    Fileinmem = malloc(filesize + 16);
 	    if (!Fileinmem) {
@@ -2683,7 +2740,7 @@ errexit:
 		while (totalread < filesize) {
 		    uint64_t chunk = filesize - totalread;
 		    if (chunk > MAXCHUNK) chunk = MAXCHUNK;
-		    readsize = fread(&Fileinmem[totalread], 1, chunk, fin);
+		    readsize = gzread(fin,&Fileinmem[totalread], chunk);
 		    if (readsize <= 0) {
 			if (readsize < 0) {
 			    fprintf(stderr,"Read error on input file.\n");
@@ -2703,15 +2760,16 @@ errexit:
 		    filesize = totalread;
 	    }
 	} else {
+	    /* Gzip, pipe, or stdin — unknown decompressed size, use realloc path */
 	    Fileinmem = malloc(MAXCHUNK + 16);
 	    filesize = 0;
 	}
 	Line = 0;
 
-	while (!feof(fin)) {
-	    readsize = fread(&Fileinmem[filesize],1,MAXCHUNK,fin);
+	while (!gzeof(fin)) {
+	    readsize = gzread(fin,&Fileinmem[filesize],MAXCHUNK);
 	    if (readsize <= 0) {
-		if (feof(fin) || readsize <0) break;
+		if (gzeof(fin) || readsize <0) break;
 	    }
 	    filesize += readsize;
 	    Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
@@ -2733,7 +2791,7 @@ errexit:
 	    fprintf(stderr,"Probably a bug in the program\n");
 	    fatal_exit();
 	}
-	fclose(fin);
+	if (fin) gzclose(fin);
 
 	Fileinmem[filesize] = '\n';
 	Fileend = &Fileinmem[filesize];
@@ -3149,12 +3207,12 @@ errexit:
 	    continue;
 	}
 	if (strcmp(argv[x],"stdin") == 0) {
-		fi = stdin;
+		fi = gzdopen(dup(0), "rb");
 #ifdef _WIN32
   setmode(0,O_BINARY);
 #endif
 	} else
-	    fi = fopen(argv[x],"rb");
+	    fi = gzopen(argv[x],"rb");
 	if (!fi) {
 	    fprintf(stderr,"Can't open:");
 	    perror(argv[x]);
@@ -3225,7 +3283,7 @@ errexit:
 	    fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
 	Totrem += Currem_global;
 	release(Currem_lock);
-	fclose(fi);
+	gzclose(fi);
 	if (Unique_global <= Totrem) {
 	    if (x+1 < argc)
 		fprintf(stderr,"All target lines removed, skipping %d remaining file%s\n",
@@ -3347,7 +3405,7 @@ errexit:
 	    if (FreeHead == NULL) FreeTail = &FreeHead;
 	    twist(FreeWaiting, BY, -1);
 	    job->next = NULL;
-	    job->func = JOB_WRITE;
+	    job->func = JOB_WRITEOUT;
 	    job->fo = fo;
 	    job->fn = argv[1];
 	    job->startline = curline++;
@@ -3379,7 +3437,7 @@ errexit:
 	munmap(Sortlist,(Estline+16)*sizeof(char *));
 	munmap(Fileinmem,Filesize+4096);
 	fclose(vmfile);
-	fclose(fin);
+	if (fin) gzclose(fin);
     }
 
 finalexit:
