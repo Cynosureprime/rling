@@ -106,9 +106,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.82 2026/03/22 17:24:36 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.83 2026/04/02 16:12:02 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.83  2026/04/02 16:12:02  dlr
+ * Minor cosmetic improvement on very large file reading.
+ *
  * Revision 1.82  2026/03/22 17:24:36  dlr
  * Add transparent gzip reading: all input/remove files can be .gz compressed. Uses zlib gzopen/gzread/gzeof. Output always plain. Static-linked libz.a.
  *
@@ -2782,7 +2785,7 @@ errexit:
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
-	fprintf(stderr,"%"PRIu64" bytes total in %.4f seconds\n",filesize,wtime);
+	fprintf(stderr,"   %"PRIu64" bytes total in %.4f seconds\n",filesize,wtime);
 	current_utc_time(&starttime);
 
 	Fileinmem = realloc(Fileinmem,filesize + 16);

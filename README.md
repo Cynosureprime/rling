@@ -124,6 +124,96 @@ This will read in all-names.txt, then find only names in the input file, and pre
 `printf 'apple\nbanana\napple\ncherry\nbanana\ndate\n' | rling stdin stdout`\
 Dedup always keeps the first occurrence of each line and preserves input order.  The output will be `apple`, `banana`, `cherry`, `date` — the second `apple` and `banana` are removed.  This is deterministic: every run produces the same result, and both the default hash mode and `-b` agree on the output.
 
+## Frequency Analysis (`-q`)
+
+The `-q` option performs frequency analysis on the input file instead of normal deduplication. Combine one or more flags to control what's reported:
+
+| Flag | Output |
+|------|--------|
+| `c` | Occurrence count |
+| `w` | The line (word) itself |
+| `l` | Line length |
+| `h` | Length histogram (distribution chart) |
+| `s` | Running percentage and cumulative statistics |
+| `a` | All of the above |
+
+Flags can be combined: `-q cw` gives count + word, `-q cwl` gives count + word + length, etc. Output is sorted by frequency (most common first). Progress and statistics go to stderr; the analysis table goes to the output file (or stdout).
+
+Additional files on the command line act as match files — rling reports how many input lines also appear in those files.
+
+### Password length histogram
+
+```bash
+rling -q h rockyou.txt stdout
+```
+```
+                Histogram of lengths
+Count     Length    Percent Cumulative
+2966034        8     20.68%     20.68%
+2506271        7     17.48%     38.16%
+2191025        9     15.28%     53.43%
+2013692       10     14.04%     67.48%
+1947795        6     13.58%     81.06%
+866035        11      6.04%     87.10%
+555291        12      3.87%     90.97%
+364164        13      2.54%     93.51%
+259169         5      1.81%     95.31%
+248468        14      1.73%     97.05%
+...
+```
+
+Shows that 8-character passwords are the most common (20.7%), and 81% of passwords are 6-10 characters long.
+
+### Word frequency (most common lines)
+
+```bash
+printf 'password\n123456\npassword\npassword\n123456\nabc\n' | rling -q cw stdin stdout
+```
+```
+Count   Line
+3       password
+2       123456
+1       abc
+```
+
+Shows occurrence count and the line itself, sorted by frequency. Great for finding the most common passwords in a wordlist.
+
+### Full analysis
+
+```bash
+printf 'password\n123456\npassword\npassword\n123456\nabc\n' | rling -q a stdin stdout
+```
+```
+Count   Length  Line
+3       8       password
+2       6       123456
+1       3       abc
+
+                Histogram of lengths
+Count     Length    Percent Cumulative
+2              3     50.00%     50.00%
+1              6     25.00%     75.00%
+1              8     25.00%    100.00%
+```
+
+Combines count, length, word, and histogram in a single report.
+
+### Matching against other files
+
+```bash
+rling -q cw passwords.txt stdout known-weak.txt common-words.txt
+```
+
+Produces the same frequency table, but also reports how many lines from `passwords.txt` appear in `known-weak.txt` and `common-words.txt`. Useful for measuring overlap between wordlists.
+
+### Analyzing compressed files
+
+```bash
+rling -q h wordlist.txt.gz stdout
+```
+
+Works directly on gzip-compressed files — no need to decompress first.
+
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.
 
