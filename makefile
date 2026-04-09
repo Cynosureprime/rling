@@ -33,7 +33,7 @@ rling.o: rling.c
 	cc -fomit-frame-pointer -pthread -O3 $(COPTS) -c rling.c
 
 rling: rling.o yarn.o qsort_mt.o
-	cc  $(COPTS) -pthread -o rling rling.o yarn.o qsort_mt.o
+	cc  $(COPTS) -pthread -o rling rling.o yarn.o qsort_mt.o -lz
 
 getpass: getpass.c
 	cc -fomit-frame-pointer -O3  $(COPTS) -o getpass getpass.c
