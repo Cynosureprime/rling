@@ -106,9 +106,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.83 2026/04/02 16:12:02 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.84 2026/07/03 05:52:30 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.84  2026/07/03 05:52:30  dlr
+ * Fix -q word field missing tab separator (regression from rev 1.76 issue #18 TAB rewrite): word field emitted no trailing separator, so -qwc header and rows ran Line and Count together and were unparseable. Add trailing tab to word field in header and data row, matching all other -q fields.
+ *
  * Revision 1.83  2026/04/02 16:12:02  dlr
  * Minor cosmetic improvement on very large file reading.
  *
@@ -2193,7 +2196,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 	    case 'w':
 		if (t[1] == '-' || isdigit(t[1]))
 		    wcol = atoi(&t[1]);
-		fprintf(fo,"%s","Line");
+		fprintf(fo,"Line\t");
 		anyvalid = 1;
 		*l++ = c;
 		break;
@@ -2233,6 +2236,7 @@ void writeanal(FILE *fo, char *fn, char *qopts, uint64_t Line)
 		    break;
 		case 'w':
 		    fwrite(Freq[x].key,Freq[x].len,1,fo);
+		    fputc('\t',fo);
 		    break;
 	    }
 	}
