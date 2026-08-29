@@ -1,0 +1,127 @@
+.\" splitlen(1) -- man-macro reference page
+.\" $Revision: 1.3 $
+.\" $Log: splitlen.1,v $
+.\" Revision 1.3  2026/08/29 17:35:44  dlr
+.\" Correct the output-template placeholder and show the $HEX[] length effect. The placeholder is # not %; splitlen.c sets OutLenId to hash at line 412 and the page had it wrong throughout, including both examples, so the documented commands produced plain.txt_NN rather than the intended split. Also records what happens with no placeholder at all: the suffix lands on the whole name including extension, giving plain.txt_16 and not plain_16.txt. -u now shows why it matters, $HEX[636166c3a9] measuring 16 bytes as written against 5 decoded, and warns that a rehex-processed wordlist otherwise collapses into one or two long-length buckets. All three behaviours verified by running.
+.\"
+.\" Revision 1.2  2026/08/29 17:16:00  dlr
+.\" Remove the redundant .PP immediately after .SH EXAMPLES. mandoc reports it as "skipping paragraph macro: PP after SH"; groff does not flag it at all, which is how it survived a groff-only check. macOS and the BSDs render with mandoc, so mandoc is what most readers of these pages actually see. No rendered output changes.
+.\"
+.\" Revision 1.1  2026/08/29 16:30:16  dlr
+.\" Initial revision: splitlen(1) man page. All 5 options; documents the -o template placeholder, append-not-truncate behaviour, and that -u changes what length is measured.
+.\"
+.TH SPLITLEN 1 "2026-08-29" "splitlen 1.3" "Password Recovery"
+.SH NAME
+splitlen \- split a file into separate files by line length
+.SH SYNOPSIS
+.B splitlen
+.BI \-o " name"
+.RB [ \-u ]
+.RB [ \-c
+.IR char ]
+.RI [ file " ...]"
+.SH DESCRIPTION
+.B splitlen
+reads the named
+.IR file s,
+or standard input if none are given, and writes each line to an output file
+chosen by that line's length.  Output files are opened and closed on demand,
+so any number of distinct lengths is handled without running out of
+descriptors, and any line length is supported.
+.PP
+This matters for masked and length-restricted attacks: a wordlist split by
+length lets each length be run against exactly the rules, masks and hash
+types that can produce it, instead of running everything against
+everything.
+.PP
+.B \-o
+is required.  Its argument is a template.  If the template contains the
+placeholder character \(em
+.BR # ,
+unless changed with
+.B \-c
+\(em the placeholder is replaced with
+.BI _ length\fR,
+so
+.B out#.txt
+yields
+.BR out_5.txt ,
+.B out_6.txt
+and so on.
+.PP
+If the template contains no placeholder the same string is appended to the
+whole name, extension included:
+.B \-o plain.txt
+produces
+.BR plain.txt_16 ,
+not
+.BR plain_16.txt .
+Put a
+.B #
+where you want the length.
+.PP
+An existing output file is appended to, not truncated, so a split may be
+built up over several runs.
+.SH OPTIONS
+.TP
+.BI \-o " name"
+Output filename template.  Required.
+.TP
+.BI \-c " char"
+Change the placeholder character in the
+.B \-o
+template.
+.TP
+.B \-u
+Decode
+.BI $HEX[ ... ]
+wrappers on input before measuring length.  Without this, a hex-wrapped
+line is measured and split by the length of its
+.I encoding,
+not of the bytes it represents.  The difference is large:
+.PP
+.RS
+.nf
+$HEX[636166c3a9]   ->  16 bytes as written
+                   ->   5 bytes decoded
+.fi
+.RE
+.IP
+A wordlist that has been through
+.BR rehex (1)
+will therefore land almost entirely in one or two long-length buckets unless
+.B \-u
+is given.
+.TP
+.B \-h, \-?
+Print the usage summary and exit.
+.SH "EXIT STATUS"
+0 on normal completion, 1 on a usage error, a missing
+.BR \-o ,
+or an allocation failure.
+.SH EXAMPLES
+Split a wordlist into
+.BR words_5.txt ,
+.BR words_6.txt
+and so on:
+.PP
+.RS
+.nf
+splitlen \-o words#.txt wordlist.txt
+.fi
+.RE
+.PP
+The same, measuring the decoded length of hex-wrapped lines:
+.PP
+.RS
+.nf
+splitlen \-u \-o words#.txt wordlist.txt
+.fi
+.RE
+.SH "SEE ALSO"
+.BR rling (1),
+.BR dedupe (1),
+.BR rehex (1),
+.BR mdxfind (1)
+.SH AUTHOR
+Waffle.

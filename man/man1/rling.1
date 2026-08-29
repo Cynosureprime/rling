@@ -1,0 +1,228 @@
+.\" rling(1) -- man-macro reference page
+.\" $Revision: 1.2 $
+.\" $Log: rling.1,v $
+.\" Revision 1.2  2026/08/29 17:16:00  dlr
+.\" Remove the redundant .PP immediately after .SH EXAMPLES. mandoc reports it as "skipping paragraph macro: PP after SH"; groff does not flag it at all, which is how it survived a groff-only check. macOS and the BSDs render with mandoc, so mandoc is what most readers of these pages actually see. No rendered output changes.
+.\"
+.\" Revision 1.1  2026/08/29 16:30:16  dlr
+.\" Initial revision: rling(1) man page. Four processing modes with their memory tradeoffs, all 17 options including -v and -T, and the -M no-effect-outside--2 caveat.
+.\"
+.TH RLING 1 "2026-08-29" "rling 1.86" "Password Recovery"
+.SH NAME
+rling \- remove, intersect, deduplicate and analyse line-oriented lists
+.SH SYNOPSIS
+.B rling
+.RI [ options ]
+.I input output
+.RI [ removefile " ...]"
+.SH DESCRIPTION
+.B rling
+reads
+.IR input ,
+removes every line that also appears in any
+.IR removefile ,
+and writes what is left to
+.IR output .
+Duplicate lines within
+.I input
+are removed as well, by default.  With
+.B \-c
+the sense is inverted and the lines
+.I common
+to input and remove files are written instead.
+.PP
+It is the tool for the routine set arithmetic of a password campaign:
+subtracting an already-tried wordlist, intersecting a candidate list with a
+known-cracked list, deduplicating a concatenation of a dozen leaks.  It is
+substantially faster than the
+.BR sort (1)
+and
+.BR uniq (1)
+pipeline it replaces, and it preserves input order unless told otherwise.
+.PP
+The names
+.B stdin
+and
+.B stdout
+may be used in place of any filename.  Both
+.I input
+and
+.I output
+are required, even when no remove file is given \(em that form is a pure
+deduplication.
+.PP
+With
+.B \-q
+.B rling
+performs frequency analysis on the input rather than set arithmetic, and any
+additional files are matched against it.
+.SH "PROCESSING MODES"
+.B rling
+offers four strategies with different memory and speed characteristics.
+They are mutually exclusive; the last one named wins, and a change is
+announced on standard error.
+.TP
+.B "hash (default)"
+In-memory hash table.  Fastest, highest memory use.
+.TP
+.B \-b
+Binary search instead of a hash table.  Slower, but noticeably less memory.
+.TP
+.B \-f
+File-backed binary search.  Slower still, smallest resident footprint.
+Combine with
+.B \-M
+and
+.BR \-T .
+.TP
+.B \-2
+rli2 mode.  All files must already be sorted.  Lowest memory use of all,
+and the only mode in which
+.B \-M
+has any effect.
+.PP
+.B \-s
+makes
+.B \-b
+and
+.B \-f
+substantially faster.
+.SH OPTIONS
+.TP
+.B \-d
+Remove duplicate lines from the input.  On by default.
+.TP
+.B \-n
+Do
+.I not
+remove duplicate lines from the input.
+.TP
+.BI \-D " file"
+Write the removed duplicates to
+.IR file .
+The same set of lines is written on every run, but their order varies
+between runs unless
+.B \-t 1
+is used.
+.TP
+.B \-c
+Write the lines common to input and remove files, rather than the
+difference.
+.TP
+.B \-s
+Sort the output.  The default is input order.
+.TP
+.B \-i
+Ignore missing or unreadable files on the remove list instead of failing.
+.TP
+.BI \-l " length"
+Restrict all matching to lines of exactly
+.I length
+bytes.
+.TP
+.BI \-t " count"
+Worker thread count, 1 to 32768.
+.TP
+.BI \-p " prime"
+Force the hash table size.
+.TP
+.BI \-M " size"
+Maximum memory, with an optional
+.BR K ,
+.B M
+or
+.B G
+suffix.  Only effective in
+.B \-2
+mode; used in any other mode it reports the setting and then warns that it
+will do nothing.
+.TP
+.BI \-T " path"
+Directory for temporary files, used by
+.BR \-f .
+.TP
+.BI \-q " flags"
+Frequency analysis on the input.
+.I flags
+is any combination of:
+.RS
+.TP 5
+.B a
+all of the below
+.TP
+.B c
+count
+.TP
+.B l
+length
+.TP
+.B w
+word
+.TP
+.B s
+running statistics
+.TP
+.B h
+append histogram
+.RE
+.IP
+At least one valid flag is required.
+.TP
+.B \-v
+Debug output.
+.TP
+.B \-h, \-?
+Print the usage summary and exit.
+.SH "EXIT STATUS"
+0 on normal completion, 1 on a usage error, a missing file without
+.BR \-i ,
+or an allocation failure.  A total runtime line is printed to standard
+error on the way out.
+.SH EXAMPLES
+Deduplicate a concatenation, preserving first-seen order:
+.PP
+.RS
+.nf
+cat leak*.txt | rling stdin merged.txt
+.fi
+.RE
+.PP
+Subtract everything already tried:
+.PP
+.RS
+.nf
+rling candidates.txt fresh.txt tried1.txt tried2.txt
+.fi
+.RE
+.PP
+Keep only the candidates that are known to have cracked something:
+.PP
+.RS
+.nf
+rling \-c candidates.txt useful.txt cracked.txt
+.fi
+.RE
+.PP
+Deduplicate a list too large for memory, using pre-sorted inputs:
+.PP
+.RS
+.nf
+rling \-2 \-M 4G \-T /var/tmp huge.sorted out.txt
+.fi
+.RE
+.PP
+Length and word-frequency profile of a wordlist:
+.PP
+.RS
+.nf
+rling \-q clw words.txt stdout
+.fi
+.RE
+.SH "SEE ALSO"
+.BR mdxfind (1),
+.BR dedupe (1),
+.BR splitlen (1),
+.BR getpass (1),
+.BR procrule (1)
+.SH AUTHOR
+Waffle.

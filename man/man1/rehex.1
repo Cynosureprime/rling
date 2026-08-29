@@ -1,0 +1,149 @@
+.\" rehex(1) -- man-macro reference page
+.\" $Revision: 1.3 $
+.\" $Log: rehex.1,v $
+.\" Revision 1.3  2026/08/29 17:35:32  dlr
+.\" Apply the $HEX[] convention per Dave: show binary examples in the toolchain form rather than describing them. DESCRIPTION now works a real encoding, cafe with an acute e giving $HEX[636166c3a9], and names the tools that accept the form on input. EXAMPLES gains three verified runs: an exact encode-decode round trip checked with od -An -tx1 rather than od -c so it does not vary with locale, colon encoding via -S, and wrapping the raw digest an hx _bin expression writes. All output shown was produced by running the commands.
+.\"
+.\" Revision 1.2  2026/08/29 17:16:00  dlr
+.\" Remove the redundant .PP immediately after .SH EXAMPLES. mandoc reports it as "skipping paragraph macro: PP after SH"; groff does not flag it at all, which is how it survived a groff-only check. macOS and the BSDs render with mandoc, so mandoc is what most readers of these pages actually see. No rendered output changes.
+.\"
+.\" Revision 1.1  2026/08/29 16:30:16  dlr
+.\" Initial revision: rehex(1) man page. Per-line encoding decision, the -S and -U conversion map, all 5 options.
+.\"
+.TH REHEX 1 "2026-08-29" "rehex 1.7" "Password Recovery"
+.SH NAME
+rehex \- apply or remove $HEX[] encoding on line-oriented input
+.SH SYNOPSIS
+.B rehex
+.RB [ \-u ]
+.RB [ \-S
+.IR spec ]
+.RB [ \-U
+.IR spec ]
+.RI [ file " ...]"
+.SH DESCRIPTION
+.B rehex
+copies its input to standard output, wrapping any line that contains a byte
+which does not survive plain-text handling in
+.BI $HEX[ ... ]\fR.
+Embedded NULs, control characters and high-bit bytes are the usual
+triggers.  With no
+.I file
+argument it reads standard input; the literal name
+.B stdin
+may be used among the file arguments.
+.PP
+The decision is per line, not per byte: if any byte in a line is marked in
+the conversion map, the whole line is hex-encoded.  The wrapper holds the
+line's bytes in lowercase hexadecimal, so the password
+.B cafe
+with an acute accent on the final e \(em five characters, six bytes in
+UTF-8 \(em becomes:
+.PP
+.RS
+.nf
+$HEX[636166c3a9]
+.fi
+.RE
+.PP
+That form is pure ASCII, contains no delimiter or control character, and is
+understood on input by
+.BR mdxfind (1),
+.BR hashpipe (1),
+.BR getpass (1),
+.BR dedupe (1)
+and
+.B rehex
+itself, which is what makes it the toolchain's interchange format for
+awkward text.
+.PP
+.B \-u
+reverses the transformation, decoding
+.B $HEX[]
+wrappers back to raw bytes.  That produces output which is no longer safe
+to pass through line-oriented tools, which is the entire reason the
+encoding exists.
+.SH OPTIONS
+.TP
+.B \-u
+Decode
+.B $HEX[]
+instead of encoding.
+.TP
+.BI \-S " spec"
+Mark characters as requiring encoding.
+.I spec
+is a comma-separated list of literal characters, decimal values,
+.BI 0x NN
+hexadecimal values, and ranges such as
+.BR a\-f ,
+.B 0\-32
+or
+.BR 0x1a\-0x1f .
+The resulting 256-entry map is printed to standard error.
+.TP
+.BI \-U " spec"
+As
+.BR \-S ,
+but unmarks.
+.B "\-U 0\-255"
+disables encoding entirely, making
+.B rehex
+a pass-through.
+.TP
+.B \-h, \-?
+Print the usage summary and exit.
+.SH "EXIT STATUS"
+0 on normal completion, 1 on a usage error.  Unreadable input files are
+reported and skipped.
+.SH EXAMPLES
+Make an arbitrary binary-contaminated wordlist safe to pipe:
+.PP
+.RS
+.nf
+rehex messy.txt > clean.txt
+.fi
+.RE
+.PP
+The round trip is exact.  Encoding and then decoding returns the original
+bytes:
+.PP
+.RS
+.nf
+$ printf 'caf\\303\\251\\n' | rehex
+$HEX[636166c3a9]
+
+$ printf 'caf\\303\\251\\n' | rehex | rehex \-u | od \-An \-tx1
+   63  61  66  c3  a9  0a
+.fi
+.RE
+.PP
+Treat the colon as needing encoding too, so that
+.BR mdxfind (1)
+result parsing cannot be confused by a password containing one:
+.PP
+.RS
+.nf
+$ printf 'pass:word\\n' | rehex \-S ':'
+$HEX[706173733a776f7264]
+.fi
+.RE
+.PP
+Wrap the raw digest an
+.BR hx (1)
+.B _bin
+expression writes, which is otherwise unsafe to pipe:
+.PP
+.RS
+.nf
+$ hx \-p alpha 'md5_bin(pass)' | rehex
+$HEX[2c1743a391305fbf367df8e4f069f9f9]
+.fi
+.RE
+.SH "SEE ALSO"
+.BR dedupe (1),
+.BR splitlen (1),
+.BR getpass (1),
+.BR rling (1)
+.SH AUTHOR
+Waffle.

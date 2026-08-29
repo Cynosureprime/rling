@@ -1,0 +1,204 @@
+.\" getpass(1) -- man-macro reference page
+.\" $Revision: 1.3 $
+.\" $Log: getpass.1,v $
+.\" Revision 1.3  2026/08/29 17:35:44  dlr
+.\" Add a verified $HEX[] recovery example. Shows a wrapped colon-bearing password passing through unchanged without -u and decoding to pass:word with it. Adds the case that matters in practice: when feeding results back as a wordlist the wrapper should usually be KEPT, because mdxfind decodes $HEX[] on input, so leaving it alone round-trips a password that -u would render unparseable. Verified both directions by running.
+.\"
+.\" Revision 1.2  2026/08/29 17:16:00  dlr
+.\" Remove the redundant .PP immediately after .SH EXAMPLES. mandoc reports it as "skipping paragraph macro: PP after SH"; groff does not flag it at all, which is how it survived a groff-only check. macOS and the BSDs render with mandoc, so mandoc is what most readers of these pages actually see. No rendered output changes.
+.\"
+.\" Revision 1.1  2026/08/29 16:30:16  dlr
+.\" Initial revision: getpass(1) man page. Default trailing-field extraction, the .txt basename expansion and the built-in excluded-extension list, all 10 options, and a note distinguishing it from getpass(3).
+.\"
+.TH GETPASS 1 "2026-08-29" "getpass 1.11" "Password Recovery"
+.SH NAME
+getpass \- extract plaintexts from hash result files
+.SH SYNOPSIS
+.B getpass
+.RI [ options ]
+.RI [ file " ...]"
+.SH DESCRIPTION
+.B getpass
+pulls the plaintext out of
+.BR mdxfind (1)
+result files and writes it to standard output.  With no
+.I file
+argument it reads standard input.
+.PP
+By default it takes everything after the
+.I last
+delimiter on each line, which is the password field in both the
+.IB hash : password
+and
+.IB hash : salt : password
+result shapes.  Lines with no delimiter are dropped.
+.SH "FILENAME EXPANSION"
+.B getpass
+understands the file-naming convention that
+.BR mdsplit (1)
+maintains.  Naming a
+.B .txt
+file expands it to every file sharing that basename, so
+.PP
+.RS
+.nf
+getpass 50m.txt
+.fi
+.RE
+.PP
+harvests the plaintexts from
+.BR 50m.MD5x01 ,
+.BR 50m.SHA1x02 ,
+and every other solution file belonging to the 50m list, without touching
+.B 50m.txt
+itself.
+.PP
+This works because
+.B getpass
+carries a list of excluded extensions \(em by default
+.BR .txt ,
+.BR .orig ,
+.BR .test ,
+.BR .csalt.txt ,
+.B .fixme
+and
+.B .new
+\(em which name files that hold unsolved hashes or source material rather
+than results.  Files matching an excluded extension are skipped, with a
+notice on standard error.
+.PP
+Use
+.B \-t
+to disable the expansion and
+.B \-n
+to disable the exclusion list.  Both together make
+.B getpass
+process exactly the files named.
+.SH OPTIONS
+.TP
+.BI \-f " field"
+Extract field
+.IR field ,
+counting from 1, instead of the trailing field.
+.TP
+.BI \-c " colspec"
+Extract by column, in the style of
+.BR cut (1):
+.IR N \-,
+.IR N \- M ,
+or
+.RI \- M .
+Columns count from 1.
+.TP
+.BI \-d " delim"
+Set the field delimiter.  Accepts a literal character, a decimal value, or
+a
+.BI 0x NN
+hexadecimal value.  Default
+.BR : .
+.TP
+.B \-u
+Decode
+.BI $HEX[ ... ]
+wrappers on output.
+.TP
+.B \-t
+Disable
+.B .txt
+extension expansion.
+.TP
+.B \-n
+Disable the excluded-extension list entirely.  Equivalent to
+.BR "\-x /dev/null" .
+.TP
+.BI \-x " file"
+Read the excluded-extension list from
+.IR file ,
+one extension per line, replacing the built-in list.
+.TP
+.BI \-S " spec"
+Mark characters as requiring
+.B $HEX[]
+encoding on output.
+.I spec
+is a comma-separated list of literal characters, decimal values,
+.BI 0x NN
+hexadecimal values, and ranges such as
+.BR a\-f ,
+.B 0\-32
+or
+.BR 0x1a\-0x1f .
+The resulting 256-entry map is printed to standard error.
+.TP
+.BI \-U " spec"
+As
+.BR \-S ,
+but unmarks.
+.B "\-U 0\-255"
+disables
+.B $HEX[]
+encoding completely.
+.TP
+.B \-h
+Print the usage summary, including the default exclusion list, and exit.
+.SH NOTES
+This is an unrelated program to the
+.BR getpass (3)
+C library function.
+.SH "EXIT STATUS"
+0 on normal completion, 1 on a usage error or an unreadable exclude file.
+Unreadable input files are reported and skipped.
+.SH EXAMPLES
+Collect every plaintext recovered from a list, ready to feed back as a
+wordlist:
+.PP
+.RS
+.nf
+getpass 50m.txt | rling stdin found.txt
+.fi
+.RE
+.PP
+Recover a password that
+.BR mdxfind (1)
+had to wrap because it contains a colon.  Without
+.BR \-u ,
+the wrapper is passed through as written:
+.PP
+.RS
+.nf
+$ cat res.MD5x01
+MD5x01 48c83cd71d44bbe192c77258b567c417:$HEX[706173733a776f7264]
+
+$ getpass \-t \-n res.MD5x01
+$HEX[706173733a776f7264]
+
+$ getpass \-t \-n \-u res.MD5x01
+pass:word
+.fi
+.RE
+.IP
+Feeding results back as a wordlist is the one case where the wrapper should
+usually be
+.I kept:
+.BR mdxfind (1)
+decodes
+.BI $HEX[ ... ]
+on input, so leaving it alone round-trips a password that
+.B \-u
+would render unparseable.
+.PP
+Pull the second colon-separated field out of an arbitrary file, ignoring
+the naming convention entirely:
+.PP
+.RS
+.nf
+getpass \-t \-n \-f 2 arbitrary.csv
+.fi
+.RE
+.SH "SEE ALSO"
+.BR mdxfind (1),
+.BR mdsplit (1),
+.BR rling (1),
+.BR rehex (1)
+.SH AUTHOR
+Waffle.

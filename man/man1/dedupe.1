@@ -1,0 +1,106 @@
+.\" dedupe(1) -- man-macro reference page
+.\" $Revision: 1.2 $
+.\" $Log: dedupe.1,v $
+.\" Revision 1.2  2026/08/29 17:16:00  dlr
+.\" Remove the redundant .PP immediately after .SH EXAMPLES. mandoc reports it as "skipping paragraph macro: PP after SH"; groff does not flag it at all, which is how it survived a groff-only check. macOS and the BSDs render with mandoc, so mandoc is what most readers of these pages actually see. No rendered output changes.
+.\"
+.\" Revision 1.1  2026/08/29 16:30:16  dlr
+.\" Initial revision: dedupe(1) man page. All 6 options; documents the -x xxHash mode as a lossy tradeoff and points at rling for the general case.
+.\"
+.TH DEDUPE 1 "2026-08-29" "dedupe 1.5" "Password Recovery"
+.SH NAME
+dedupe \- remove duplicate lines without sorting
+.SH SYNOPSIS
+.B dedupe
+.RB [ \-x ]
+.RB [ \-u ]
+.RB [ \-S
+.IR spec ]
+.RB [ \-U
+.IR spec ]
+.RI [ file " ...]"
+.SH DESCRIPTION
+.B dedupe
+writes each distinct input line to standard output exactly once, in
+first-seen order.  With no
+.I file
+argument it reads standard input; the literal name
+.B stdin
+may be used among the file arguments.  Multiple files are treated as one
+stream, so
+.B dedupe
+also merges.
+.PP
+Unlike
+.BR sort (1)
+.B \-u
+it does not sort and does not need to hold the input in sorted form.  For
+the single job of deduplicating a wordlist,
+.BR rling (1)
+is generally the better tool \(em it is faster and offers set subtraction
+as well.
+.B dedupe
+is the smaller, dependency-light alternative.
+.SH OPTIONS
+.TP
+.B \-x
+Store an xxHash digest of each line instead of the line itself.  Uses far
+less memory on a large input.
+.IP
+This is a lossy trade.  Two distinct lines that hash to the same value are
+treated as duplicates, and the second is silently discarded.  Do not use
+.B \-x
+when the output must be complete.
+.TP
+.B \-u
+Decode
+.BI $HEX[ ... ]
+wrappers on output.
+.TP
+.BI \-S " spec"
+Mark characters as requiring
+.B $HEX[]
+encoding on output.
+.I spec
+is a comma-separated list of literal characters, decimal values,
+.BI 0x NN
+hexadecimal values, and ranges such as
+.BR a\-f ,
+.B 0\-32
+or
+.BR 0x1a\-0x1f .
+The resulting 256-entry map is printed to standard error.
+.TP
+.BI \-U " spec"
+As
+.BR \-S ,
+but unmarks.
+.TP
+.B \-h, \-?
+Print the usage summary and exit.
+.SH "EXIT STATUS"
+0 on normal completion, 1 on a usage error.  Unreadable input files are
+reported and skipped.
+.SH EXAMPLES
+Merge and deduplicate several lists:
+.PP
+.RS
+.nf
+dedupe leak1.txt leak2.txt leak3.txt > merged.txt
+.fi
+.RE
+.PP
+Deduplicate a list too large to hold in memory verbatim, accepting the
+collision risk:
+.PP
+.RS
+.nf
+dedupe \-x enormous.txt > merged.txt
+.fi
+.RE
+.SH "SEE ALSO"
+.BR rling (1),
+.BR rehex (1),
+.BR splitlen (1)
+.SH AUTHOR
+Waffle.
