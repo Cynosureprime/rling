@@ -76,7 +76,7 @@ rling [options] input output [remfile1 remfile2 ...]
 | ------ | ----------- |
 | `-i` | Ignore missing or inaccessible files on the remove list instead of aborting. |
 | `-d` | Remove duplicate lines from input (on by default). The first occurrence of each line is always kept. |
-| `-D file` | Write duplicate lines to `file`. |
+| `-D file` | Write duplicate lines to `file`. Which lines are written is deterministic, but their **order is not** when more than one thread is used - worker threads append as they encounter them. Use `-t 1` if you need a reproducible ordering. |
 | `-n` | Do **not** remove duplicate lines from input. |
 | `-c` | Output only lines **common** to both the input and the remove files. |
 | `-s` | Sort output. Default is to preserve input order. Sorting makes `-b` and `-f` substantially faster. |
@@ -93,6 +93,18 @@ rling [options] input output [remfile1 remfile2 ...]
 | `-h` | Display help. |
 
 `stdin` and `stdout` can be used in place of any filename.
+
+### Output determinism
+
+The output file is fully deterministic. When duplicates are removed, the **first**
+occurrence in the input is the one kept - given the input `a b a c b`, the survivors
+are lines 1, 2 and 4, and the output is `a b c`. That holds regardless of how many
+threads are used, and the hash (default), `-b` and `-2` modes all agree with each
+other, so a run can be reproduced or diffed against another machine.
+
+The one exception is the `-D` duplicate stream. It always contains the same lines,
+but they are written in whatever order the worker threads encounter them, so the
+order varies from run to run. Run with `-t 1` if you need it reproducible.
 
 ## Examples
 There are many common, and not so common uses for rling.\
