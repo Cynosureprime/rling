@@ -106,9 +106,30 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.85 2026/08/29 01:00:08 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.86 2026/08/29 14:48:26 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.86  2026/08/29 14:48:26  dlr
+ * Fix the repair map bit set on LLP64 targets (issue #49).
+ *
+ * SetRepair() built its bit mask with 1UL, which is 64 bits on the LP64
+ * platforms but only 32 on Windows.  A shift of 32 or more is undefined there,
+ * and x86 masks the count to five bits, so roughly half the repair flags were
+ * written to the wrong bit of the word.  Those lines were never re-seated, and
+ * their groups kept a later occurrence instead of the first, while the counts
+ * and the timings looked entirely correct.  Use (uint64_t)1, matching the
+ * existing Commonset/Bloomset macros.
+ *
+ * Windows only.  The macOS, Linux, FreeBSD and ppc64le builds were never
+ * affected.  Reported by delins, whose test duplicates each line at a random
+ * earlier position, so that dedupe of the result must reproduce the original
+ * file exactly.
+ *
+ * Verified by cross-building rling.exe and running it under wine: the 1.85
+ * binary fails that test, the fixed binary passes.  Also verified on the
+ * reporter's file shape at full scale, 60982913 unique lines in 365897478, and
+ * against 1.84 across the option matrix.
+ *
  * Revision 1.85  2026/08/29 01:00:08  dlr
  * Parallelise the first-occurrence fixup (issue #49).
  * Settle duplicate survivors by ADDRESS rather than by index, which is the
@@ -589,7 +610,7 @@ struct Linelist **HashLine;
  * the stripe lock serialises only repairs landing in the same bucket.
  */
 uint64_t *Repair;
-#define SetRepair(l)  __sync_fetch_and_or(&Repair[(l)>>6],1UL<<((l)&63))
+#define SetRepair(l)  __sync_fetch_and_or(&Repair[(l)>>6],(uint64_t)1<<((l)&63))
 #define TestRepair(l) ((Repair[(l)>>6] >> ((l)&63)) & 1)
 #define AddrOf(l)     ((uint64_t)Sortlist[l] & 0x7fffffffffffffffL)
 
