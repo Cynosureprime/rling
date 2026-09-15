@@ -49,7 +49,16 @@ Thanks to the "read exactly once, write exactly once" method rling uses for file
 All input and remove files can be gzip-compressed (.gz), and rling detects the format automatically via zlib.  Plain (uncompressed) files work exactly as before with no performance penalty.  Output is always uncompressed.  This eliminates the need to decompress files before processing them.
 
 ## Setup
-There are several precompiled binaries included with the distribution.  If your system is one of these, you are done.  If not, here are some things to watch out for\
+Prebuilt binaries for every supported platform are attached to each
+[release](https://github.com/Cynosureprime/rling/releases), signed where the
+platform supports it, and are not kept in this repository.  Download the archive
+for your system and you are done.  Each archive also carries the manual pages
+under `man/man1`.
+
+To build from source instead, `make` produces `rling`, `getpass`, `rehex` and
+`splitlen`.  `make dedupe` additionally needs libJudy and its headers; if they
+are somewhere the compiler does not search by default, add the paths, for
+example `-I/opt/local/include -L/opt/local/lib`.  Things to watch out for:\
 * -DINTEL and -DPOWERPC\
 The makefile has a few different options for compiling the code.  There is SSE Intel code used in a rling to improve finding the end of strings.  -DINTEL enables this code.
 There was PowerPC specific altivec code, which has been removed (for now) as the code was changed to make the intristic memchr "fast enough" for rling.  On PowerPC platforms you should add -DPOWERPC and include -malitivec to allow for this.  -DAIX is a good idea if compiling on AIX, along with -maix64.
