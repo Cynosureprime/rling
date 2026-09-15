@@ -57,10 +57,13 @@
  *
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.10 2023/09/02 05:27:23 dlr Exp dlr $";
+static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/getpass.c,v 1.11 2026/03/23 23:37:52 dlr Exp dlr $";
 
 /*
  * $Log: getpass.c,v $
+ * Revision 1.11  2026/03/23 23:37:52  dlr
+ * Increase CACHESIZE from 10K to 80K to match mdxfind MAXLINE*2
+ *
  * Revision 1.10  2023/09/02 05:27:23  dlr
  * Fix memory expansion on read
  *
@@ -93,7 +96,7 @@ static char *Version = "$Header: /home/dlr/src/mdfind/RCS/getpass.c,v 1.10 2023/
 /* start with a 10k line size.  It will expand this as required, if you
  * have long lines
  */
-#define CACHESIZE 10240
+#define CACHESIZE 81920
 
 char *Cache;
 uint64_t Cachesize;

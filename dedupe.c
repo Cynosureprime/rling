@@ -26,10 +26,13 @@
  * different lines may hash to the same value).  
  */
 
-static char *Version = "$Header: /home/dlr/src/mdfind/RCS/dedupe.c,v 1.5 2020/07/31 02:36:55 dlr Exp dlr $";
+static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/dedupe.c,v 1.6 2020/08/03 22:43:46 dlr Exp dlr $";
 
 /*
  * $Log: dedupe.c,v $
+ * Revision 1.6  2020/08/03 22:43:46  dlr
+ * Improve Windows I/O
+ *
  * Revision 1.5  2020/07/31 02:36:55  dlr
  * Add -S/-U to allow $HEX[] map forcing.
  *
@@ -469,12 +472,12 @@ int main(int argc,char **argv) {
     }
     argc -= optind;
     argv += optind;
-#ifdef _WIN32
+#if defined _WIN32 || defined __MSYS__
 setmode(1,O_BINARY);
 #endif
 
     if (argc == 0) {
-#ifdef _WIN32
+#if defined _WIN32 || defined __MSYS__
 setmode(0,O_BINARY);
 #endif
         process(stdin,"stdin");
@@ -482,7 +485,7 @@ setmode(0,O_BINARY);
     for (x=0; x<argc; x++) {
 	if (strcmp(argv[x],"stdin") == 0) {
 	    fi = stdin;
-#ifdef _WIN32
+#if defined _WIN32 || defined __MSYS__
 setmode(0,O_BINARY);
 #endif
 	} else
