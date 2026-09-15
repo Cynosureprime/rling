@@ -1,6 +1,9 @@
 .\" rling(1) -- man-macro reference page
-.\" $Revision: 1.2 $
+.\" $Revision: 1.3 $
 .\" $Log: rling.1,v $
+.\" Revision 1.3  2026/09/15 16:31:49  dlr
+.\" document -L; correct -l, which is prefix-limited matching not a length restriction
+.\"
 .\" Revision 1.2  2026/08/29 17:16:00  dlr
 .\" Remove the redundant .PP immediately after .SH EXAMPLES. mandoc reports it as "skipping paragraph macro: PP after SH"; groff does not flag it at all, which is how it survived a groff-only check. macOS and the BSDs render with mandoc, so mandoc is what most readers of these pages actually see. No rendered output changes.
 .\"
@@ -48,7 +51,7 @@ may be used in place of any filename.  Both
 .I input
 and
 .I output
-are required, even when no remove file is given \(em that form is a pure
+are required, even when no remove file is given; that form is a pure
 deduplication.
 .PP
 With
@@ -79,7 +82,11 @@ and
 rli2 mode.  All files must already be sorted.  Lowest memory use of all,
 and the only mode in which
 .B \-M
-has any effect.
+has any effect.  This mode writes each line as the merge decides it and never
+holds the finished result, so
+.B \-L
+cannot be used with it and the combination is refused rather than silently
+run in another mode.
 .PP
 .B \-s
 makes
@@ -112,13 +119,47 @@ difference.
 .B \-s
 Sort the output.  The default is input order.
 .TP
+.B \-L
+Order the output by line length, shortest first.  Lengths are counted in
+BYTES, as everywhere else in
+.BR rling ,
+so a multibyte character contributes more than one.
+.IP
+The ordering is applied after every duplicate and remove pass has finished,
+because those work by sorting lexically and collapsing adjacent equals: any
+earlier and the duplicates would be scattered apart and would stop being
+found.  It is a stable sort, so lines of equal length keep the order the rest
+of the run gave them.  That makes
+.B \-s \-L
+length-major and lexical-minor, while
+.B \-L
+alone keeps input order within each length.
+.IP
+Not usable with
+.B \-2
+or
+.BR \-l ,
+both of which are refused.  See
+.BR "PROCESSING MODES" .
+.TP
 .B \-i
 Ignore missing or unreadable files on the remove list instead of failing.
 .TP
 .BI \-l " length"
-Restrict all matching to lines of exactly
+Compare only the first
 .I length
-bytes.
+bytes of each line.  Lines agreeing over that prefix are treated as the same
+line however they continue, so
+.B abc
+,
+.B abcdef
+and
+.B abcXYZ
+are one line under
+.BR "\-l 3" .
+This makes equality independent of length, which is why it cannot be combined
+with
+.BR \-L .
 .TP
 .BI \-t " count"
 Worker thread count, 1 to 32768.
@@ -208,6 +249,22 @@ Deduplicate a list too large for memory, using pre-sorted inputs:
 .RS
 .nf
 rling \-2 \-M 4G \-T /var/tmp huge.sorted out.txt
+.fi
+.RE
+.PP
+Deduplicate and order the result by length, shortest first:
+.PP
+.RS
+.nf
+rling \-L words.txt bylen.txt
+.fi
+.RE
+.PP
+Length first, then alphabetical inside each length:
+.PP
+.RS
+.nf
+rling \-s \-L words.txt sorted.txt
 .fi
 .RE
 .PP

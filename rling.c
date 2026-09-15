@@ -106,9 +106,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.86 2026/08/29 14:48:26 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.87 2026/09/15 16:29:25 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.87  2026/09/15 16:29:25  dlr
+ * add -L, a stable linear length sort applied after all removal passes
+ *
  * Revision 1.86  2026/08/29 14:48:26  dlr
  * Fix the repair map bit set on LLP64 targets (issue #49).
  *
@@ -622,7 +625,7 @@ volatile int Stripelock[NSTRIPE];
 
 struct timespec inittime;
 int Dedupe = 1;
-int DoCommon = 0, SortOut = 0;
+int DoCommon = 0, SortOut = 0, SortLen = 0;
 uint64_t *Common, *Bloom;
 #define Commonset(offset) {__sync_or_and_fetch(&Common[(uint64_t)(offset)/64],(uint64_t)1L << ((uint64_t)(offset) & 0x3f)); }
 #define Bloomset(offset) (__sync_fetch_and_or(&Bloom[(uint64_t)(offset)/64],(uint64_t)1L << ((uint64_t)(offset) & 0x3f)) & ((uint64_t)1L <<((uint64_t)(offset) & 0x3f)))
@@ -1050,6 +1053,34 @@ int comp3(const void *a, const void *b) {
     return(0);
 }
 
+
+/*
+ * linelen returns the length the WRITER will use: up to the newline, less one
+ * trailing \r.  Taking it from the same place the output does keeps the
+ * ordering and the written lines in agreement.  The deleted bit is masked off
+ * first, so a removed line still has a length and is simply carried along.
+ */
+static inline uint64_t linelen(char *p) {
+    char *key = (char *)((uint64_t)p & 0x7fffffffffffffffL);
+    char *eol = findeol(key, Fileend - key);
+    if (!eol) eol = Fileend;
+    if (eol > key && eol[-1] == '\r') eol--;
+    return (uint64_t)(eol - key);
+}
+
+/*
+ * comp6 orders by line length and falls back to comp1, so the result is a
+ * total order and a run is reproducible.  This is only reached when the
+ * counting sort cannot obtain its working array; the counting sort is both
+ * faster and stable, and is preferred.
+ */
+int comp6(const void *a, const void *b) {
+    uint64_t la = linelen(*((char **)a));
+    uint64_t lb = linelen(*((char **)b));
+    if (la < lb) return(-1);
+    if (la > lb) return(1);
+    return(comp1(a,b));
+}
 
 /*
  * comp5 is used for the frequency analysis. The sort here
@@ -1555,7 +1586,7 @@ MDXALIGN void procjob(void *dummy) {
 	    case JOB_WRITEOUT:
 		unique = 0;
 		thisend = (uint64_t)Fileend;
-		if (DoCommon || (SortOut && !IsSorted) || ProcMode == 2) {
+		if (DoCommon || (SortOut && !IsSorted) || ProcMode == 2 || SortLen) {
 		    uint64_t twrite;
 		    twrite = 0;
 		    newline = job->writeindex;
@@ -2456,6 +2487,7 @@ int main(int argc, char **argv) {
     Dedupe = 1;
     DoDebug = 0;
     SortOut = 0;
+    SortLen = 0;
     LenMatch = 0;
     Maxdepth_global = 0;
     Workthread = 0;
@@ -2467,9 +2499,9 @@ int main(int argc, char **argv) {
     current_utc_time(&starttime);
     current_utc_time(&inittime);
 #ifdef _AIX
-    while ((ch = getopt(argc, argv, "?2hbsficdnvq:t:p:l:D:T:M:")) != -1) {
+    while ((ch = getopt(argc, argv, "?2hbsfLicdnvq:t:p:l:D:T:M:")) != -1) {
 #else
-    while ((ch = getopt_long(argc, argv, "?2hbsficdnvq:t:p:l:D:T:M:",longopt,NULL)) != -1) {
+    while ((ch = getopt_long(argc, argv, "?2hbsfLicdnvq:t:p:l:D:T:M:",longopt,NULL)) != -1) {
 #endif
 	switch(ch) {
 	    case '?':
@@ -2511,6 +2543,10 @@ errexit:
 
 	    case 's':
 		SortOut = 1;
+		break;
+
+	    case 'L':
+		SortLen = 1;
 		break;
 
 	    case 'f':
@@ -2663,6 +2699,25 @@ errexit:
     if (LenMatch && ProcMode == 0) {
 	ProcMode = 1;
 	fprintf(stderr,"Length matching requires -b, -2 or -f modes, so set to -b\n");
+    }
+
+    /* -L needs the whole result in hand before it can order it, and -2 never
+     * has that: rli2() streams a merge and writes each line as the merge
+     * decides it, which is the entire reason that mode costs so little memory.
+     * Coercing to another mode would silently spend gigabytes on an input
+     * chosen for -2 precisely because it must not, so this is refused rather
+     * than quietly reinterpreted. */
+    if (SortLen && ProcMode == 3) {
+	fprintf(stderr,"-L cannot be used with -2.  -2 writes each line as the merge decides it and never holds the whole result, so there is nothing to sort.  Use -b or -f.\n");
+	fatal_exit();
+    }
+
+    /* -l makes equality ignore everything past the first N characters, so
+     * lines of different lengths can be duplicates of one another.  Ordering
+     * that result by length asks two contradictory things of one run. */
+    if (SortLen && LenMatch) {
+	fprintf(stderr,"-L cannot be used with -l.  -l treats lines that differ in length as equal, so ordering the result by length is not well defined.\n");
+	fatal_exit();
     }
 
     if (DoAnalysis && ProcMode == 0) {
@@ -3432,6 +3487,67 @@ errexit:
 	fprintf(stderr,"Final sort ");fflush(stdout);
 	forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
 	qsort_mt(Sortlist,Line,sizeof(Sortlist[0]),comp3,Maxt,forkelem);
+	current_utc_time(&curtime);
+	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
+	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;
+	fprintf(stderr,"in %.4f seconds\n",wtime);
+	current_utc_time(&starttime);
+    }
+
+    /* Length ordering happens last, after every removal and dedupe pass has
+     * finished.  Those work by sorting lexically and collapsing adjacent
+     * equals, so ordering by length any earlier would scatter the duplicates
+     * apart and they would stop being found at all.
+     *
+     * A counting sort rather than a comparison sort.  The lengths are small
+     * bounded integers whose range the input scan already established, so this
+     * is linear where a qsort is n log n, and in the common case of the
+     * default mode without -s there is no other final sort to amortise
+     * against.
+     *
+     * It is also stable, which settles the order within one length without
+     * inventing a rule for it: whatever the previous stage established is
+     * kept.  With -s that is lexical, so -s -L gives length-major and
+     * lexical-minor.  Without it, input order survives.
+     *
+     * Deleted lines keep their top bit and are skipped by the writer wherever
+     * they end up, so they are carried along here rather than special-cased.
+     */
+    if (SortLen) {
+	uint64_t *lcount, li, lmax, run, nxt, L;
+	char **dest;
+
+	fprintf(stderr,"Length sort ");fflush(stderr);
+	lmax = Maxlen_global + 1;
+	lcount = calloc(lmax + 2, sizeof(uint64_t));
+	dest = malloc((Line + 16) * sizeof(char *));
+	if (lcount && dest) {
+	    for (li = 0; li < Line; li++) {
+		L = linelen(Sortlist[li]);
+		if (L > lmax) L = lmax;
+		lcount[L]++;
+	    }
+	    for (run = 0, li = 0; li <= lmax; li++) {
+		nxt = lcount[li];
+		lcount[li] = run;
+		run += nxt;
+	    }
+	    for (li = 0; li < Line; li++) {
+		L = linelen(Sortlist[li]);
+		if (L > lmax) L = lmax;
+		dest[lcount[L]++] = Sortlist[li];
+	    }
+	    memcpy(Sortlist, dest, Line * sizeof(char *));
+	} else {
+	    /* The working array is one pointer per line, which on a list large
+	     * enough can fail.  comp6 needs no array, but it is n log n and is
+	     * not stable, so it is the fallback and not the design. */
+	    fprintf(stderr,"(no room for the counting sort, falling back) ");
+	    fflush(stderr);
+	    forkelem = 65536; if (forkelem > Line) forkelem = Line /2; if (forkelem < 1024) forkelem= 1024;
+	    qsort_mt(Sortlist,Line,sizeof(Sortlist[0]),comp6,Maxt,forkelem);
+	}
+	free(lcount); free(dest);
 	current_utc_time(&curtime);
 	wtime = (double) curtime.tv_sec + (double) (curtime.tv_nsec) / 1000000000.0;
 	wtime -= (double) starttime.tv_sec + (double) (starttime.tv_nsec) / 1000000000.0;

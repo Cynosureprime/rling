@@ -46,7 +46,7 @@ For large files, memory use can still be high.  rling displays the estimated amo
 * stdin/stdout/named pipes fully supported\
 Thanks to the "read exactly once, write exactly once" method rling uses for file I/O, stdin/stdout and named pipes can be used in any position that requires a file name.  This is great for creating complex workloads.
 * Transparent gzip support\
-All input and remove files can be gzip-compressed (.gz) — rling detects the format automatically via zlib.  Plain (uncompressed) files work exactly as before with no performance penalty.  Output is always uncompressed.  This eliminates the need to decompress files before processing them.
+All input and remove files can be gzip-compressed (.gz), and rling detects the format automatically via zlib.  Plain (uncompressed) files work exactly as before with no performance penalty.  Output is always uncompressed.  This eliminates the need to decompress files before processing them.
 
 ## Setup
 There are several precompiled binaries included with the distribution.  If your system is one of these, you are done.  If not, here are some things to watch out for\
@@ -80,12 +80,13 @@ rling [options] input output [remfile1 remfile2 ...]
 | `-n` | Do **not** remove duplicate lines from input. |
 | `-c` | Output only lines **common** to both the input and the remove files. |
 | `-s` | Sort output. Default is to preserve input order. Sorting makes `-b` and `-f` substantially faster. |
+| `-L` | Order output by line length, shortest first. Lengths are in **bytes**, so a multibyte character counts as more than one. Applied after all duplicate and remove passes, and stable, so equal-length lines keep the order the rest of the run gave them: `-s -L` is length-major and lexical-minor, while `-L` alone keeps input order within each length. Cannot be combined with `-2` or `-l`. |
 | `-t number` | Number of threads to use (default: all available cores). |
 | `-p prime` | Force the hash table to a specific size. A power-of-two value uses shift-and-mask instead of modulo. |
 | `-b` | Use binary search instead of hashing. Slower, but uses roughly half the memory. Produces the same output as the default hash mode. |
 | `-2` | Use rli2 mode. All files must already be sorted. Very low memory usage. |
 | `-f` | Use a file-backed Berkeley DB instead of memory. Slower, but supports very large files with limited RAM. |
-| `-l len` | Limit all matching to a specific line length. Requires `-b`, `-2`, or `-f`. |
+| `-l len` | Compare only the first `len` bytes of each line. Lines agreeing over that prefix are treated as the same line however they continue, so `abc`, `abcdef` and `abcXYZ` are one line under `-l 3`. This makes equality independent of length, which is why it cannot be combined with `-L`. Requires `-b`, `-2`, or `-f`. |
 | `-M memsize` | Maximum memory for `-f` mode cache (e.g., `-M 4g`). |
 | `-T path` | Directory to store temporary files in (default: current directory). |
 | `-q [cahwsl]` | Frequency analysis on input. Flags: `a` all, `c` count, `h` histogram, `w` word, `l` length, `s` running statistics. Additional files on the command line will be matched against the input. |
@@ -119,7 +120,7 @@ This will read last-names.txt, *not* remove duplicates (-n switch), and use bina
 This will read clean-list.txt, remove all duplicate lines, and re-write it (in original order) back to clean-list.txt.  This use is permitted (maybe not recommended, but permitted), because all of the input file is read into memory prior to opening the output file for writing.  Great if you are short on disk space, too.
 
 `rling big-file.txt.gz deduped.txt`\
-Gzip-compressed input files are handled transparently — no need to decompress first.  This reads `big-file.txt.gz`, deduplicates, and writes plain text to `deduped.txt`.
+Gzip-compressed input files are handled transparently, with no need to decompress first.  This reads `big-file.txt.gz`, deduplicates, and writes plain text to `deduped.txt`.
 
 `rling input.txt cleaned.txt old-data.txt.gz archive/*.gz`\
 Remove files can also be gzip-compressed.  This removes any lines from `input.txt` that appear in `old-data.txt.gz` or any of the compressed files in `archive/`.  Plain and compressed files can be freely mixed.
@@ -130,11 +131,17 @@ Frequency analysis works on compressed input too.  This produces a count+word fr
 `find /path/to/names -type f -print0 | xargs -0 gzcat | rling stdin stdout | gzip -9 > all-names.txt.gz`\
 For more complex pipelines, stdin/stdout still work as before.  This example deduplicates across many files via a pipe.
 
+`rling -L words.txt bylen.txt`\
+Deduplicate, then write the result ordered by line length, shortest first.  The length ordering is applied after duplicate removal, not before: dedup works by sorting lexically and collapsing adjacent equals, so reordering by length any earlier would scatter the duplicates apart and they would stop being found.
+
+`rling -s -L words.txt sorted.txt`\
+Length first, alphabetical within each length.  The length sort is stable, so whatever order the previous stage produced survives inside a length group; `-s` makes that order lexical.
+
 `rling -c all-names.txt matching.txt /path/to/names/[a-f]\*`\
 This will read in all-names.txt, then find only names in the input file, and present in one or more of the /path/to/names[a-f] files.  If there are no matching lines, no data is output to matching.txt.
 
 `printf 'apple\nbanana\napple\ncherry\nbanana\ndate\n' | rling stdin stdout`\
-Dedup always keeps the first occurrence of each line and preserves input order.  The output will be `apple`, `banana`, `cherry`, `date` — the second `apple` and `banana` are removed.  This is deterministic: every run produces the same result, and both the default hash mode and `-b` agree on the output.
+Dedup always keeps the first occurrence of each line and preserves input order.  The output will be `apple`, `banana`, `cherry`, `date`; the second `apple` and `banana` are removed.  This is deterministic: every run produces the same result, and both the default hash mode and `-b` agree on the output.
 
 ## Frequency Analysis (`-q`)
 
@@ -151,7 +158,7 @@ The `-q` option performs frequency analysis on the input file instead of normal 
 
 Flags can be combined: `-q cw` gives count + word, `-q cwl` gives count + word + length, etc. Output is sorted by frequency (most common first). Progress and statistics go to stderr; the analysis table goes to the output file (or stdout).
 
-Additional files on the command line act as match files — rling reports how many input lines also appear in those files.
+Additional files on the command line act as match files, and rling reports how many input lines also appear in those files.
 
 ### Password length histogram
 
@@ -224,7 +231,7 @@ Produces the same frequency table, but also reports how many lines from `passwor
 rling -q h wordlist.txt.gz stdout
 ```
 
-Works directly on gzip-compressed files — no need to decompress first.
+Works directly on gzip-compressed files, with no need to decompress first.
 
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.
