@@ -310,9 +310,23 @@ allocate_thread(struct common *c)
 	verify(pthread_mutex_lock(&c->mtx_al));
 	for (i = 0; i < c->nthreads; i++)
 		if (c->pool[i].st == ts_idle) {
+			/* Take the slot's own mutex BEFORE publishing ts_work.
+			 * The caller fills in qs->a and qs->n only after we
+			 * return, and the waiting thread tests qs->st under
+			 * mtx_st -- so if ts_work becomes visible before we
+			 * hold mtx_st, that thread can win the mutex, see the
+			 * new state, skip the wait and run qsort_algo() on the
+			 * PREVIOUS job's a/n.  The subrange being handed over
+			 * is then never sorted by anyone: qsort_mt returns,
+			 * without error or hang, leaving one contiguous run
+			 * out of order.  Diagnosed 2026-10-16 from an mdindex
+			 * build, confirmed by ThreadSanitizer (write of st at
+			 * this line under mtx_al vs read of st under mtx_st in
+			 * qsort_thread).  Holding mtx_st across the store
+			 * keeps ts_work invisible until a/n are set. */
+			verify(pthread_mutex_lock(&c->pool[i].mtx_st));
 			c->idlethreads--;
 			c->pool[i].st = ts_work;
-			verify(pthread_mutex_lock(&c->pool[i].mtx_st));
 			verify(pthread_mutex_unlock(&c->mtx_al));
 			return (&c->pool[i]);
 		}
@@ -459,6 +473,7 @@ qsort_thread(void *p)
 	int i;
 	struct common *c;
 	pthread_t id;
+	enum thread_state st;
 
 	qs = p;
 	id = qs->id;
@@ -469,12 +484,13 @@ again:
 	verify(pthread_mutex_lock(&qs->mtx_st));
 	while (qs->st == ts_idle)
 		verify(pthread_cond_wait(&qs->cond_st, &qs->mtx_st));
+	st = qs->st;			/* read once, under the lock */
 	verify(pthread_mutex_unlock(&qs->mtx_st));
-	if (qs->st == ts_term) {
+	if (st == ts_term) {
 		DLOG("%10x n=%-10d Thread signalled to exit.\n", id, 0);
 		return(NULL);
 	}
-	assert(qs->st == ts_work);
+	assert(st == ts_work);
 
 	qsort_algo(qs);
 

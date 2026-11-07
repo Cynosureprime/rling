@@ -98,6 +98,9 @@
  * Cyan4973 for the great work on xxHash
  *
  * Waffle - July, 2020
+ *
+ * Built with qsort_mt.c 1.8 from 1.88 on: the thread-pool race that could
+ * leave one subrange unsorted, with no error, is fixed there.
  */
 
 extern char *optarg;
@@ -106,9 +109,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.87 2026/09/15 16:29:25 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.88 2026/11/07 19:18:39 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.88  2026/11/07 19:18:39  dlr
+ * Release carrying qsort_mt.c 1.8. That revision fixes a race in allocate_thread that could leave one contiguous subrange unsorted while qsort_mt returned normally, so a sort, dedupe or -L run could produce out-of-order output with no error. No change to rling.c logic; a header note records the qsort_mt revision it is built with.
+ *
  * Revision 1.87  2026/09/15 16:29:25  dlr
  * add -L, a stable linear length sort applied after all removal passes
  *

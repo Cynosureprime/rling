@@ -6,3 +6,8 @@
 /splitlen
 /dedupe
 .claude/
+
+# Release notes are per-program and belong to this directory only.
+# They feed the GitHub release body and the artifact archives; they are not
+# repo content and are never committed. Never carry notes for another program.
+RELEASE_NOTES.md
