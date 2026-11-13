@@ -45,8 +45,8 @@ If you need to process very large datasets, and don't have enough memory, the -f
 For large files, memory use can still be high.  rling displays the estimated amount of memory to be used as soon as practical after reading the input files.  This can still be "too late" for some use cases - in general, you need at least 2 times the input file size in memory.
 * stdin/stdout/named pipes fully supported\
 Thanks to the "read exactly once, write exactly once" method rling uses for file I/O, stdin/stdout and named pipes can be used in any position that requires a file name.  This is great for creating complex workloads.
-* Transparent gzip support\
-All input and remove files can be gzip-compressed (.gz), and rling detects the format automatically via zlib.  Plain (uncompressed) files work exactly as before with no performance penalty.  Output is always uncompressed.  This eliminates the need to decompress files before processing them.
+* Transparent decompression (gzip, xz, bzip2, zstd)\
+All input and remove files can be compressed, and rling detects the format automatically from the data itself — no suffix or flag required.  gzip, xz, bzip2 and zstd are all supported, each including files made of several concatenated streams.  Because detection reads the stream forward and never seeks or reopens it, every format works on `stdin` and named pipes just as well as on a regular file.  Plain (uncompressed) files work exactly as before with no performance penalty, and output is always uncompressed.  A truncated or corrupt compressed stream is a fatal error, never a silent short read, so a partial decode can never masquerade as a complete run.  `zip` and `7z` archives are not read — decompress those first, or pipe them through the matching tool.
 
 ## Setup
 Prebuilt binaries for every supported platform are attached to each
@@ -56,9 +56,22 @@ for your system and you are done.  Each archive also carries the manual pages
 under `man/man1`.
 
 To build from source instead, `make` produces `rling`, `getpass`, `rehex` and
-`splitlen`.  `make dedupe` additionally needs libJudy and its headers; if they
-are somewhere the compiler does not search by default, add the paths, for
-example `-I/opt/local/include -L/opt/local/lib`.  Things to watch out for:\
+`splitlen`.  `rling` links the decompression libraries zlib, liblzma, libbz2 and
+libzstd, so install their development packages first:
+
+* Debian/Ubuntu: `zlib1g-dev liblzma-dev libbz2-dev libzstd-dev`
+* Fedora/RHEL: `zlib-devel xz-devel bzip2-devel libzstd-devel`
+* macOS (Homebrew): `brew install xz zstd` — zlib and bzip2 ship with macOS
+* FreeBSD: `pkg install zstd` — lzma, bz2 and z are in the base system
+
+The makefile finds zlib, liblzma and libzstd through `pkg-config` (which gets
+the include and library paths right on Linux, the BSDs, Homebrew and MacPorts);
+if `pkg-config` is unavailable it falls back to plain `-l` flags plus the usual
+macOS prefixes.  So `pkg-config` is recommended, though not required on Linux
+where the headers and libraries are already in the default search path.  `make
+dedupe` additionally needs libJudy and its headers; if any of these are
+somewhere the compiler does not search by default, add the paths, for example
+`-I/opt/local/include -L/opt/local/lib`.  Things to watch out for:\
 * -DINTEL and -DPOWERPC\
 The makefile has a few different options for compiling the code.  There is SSE Intel code used in a rling to improve finding the end of strings.  -DINTEL enables this code.
 There was PowerPC specific altivec code, which has been removed (for now) as the code was changed to make the intristic memchr "fast enough" for rling.  On PowerPC platforms you should add -DPOWERPC and include -malitivec to allow for this.  -DAIX is a good idea if compiling on AIX, along with -maix64.
@@ -128,14 +141,14 @@ This will read last-names.txt, *not* remove duplicates (-n switch), and use bina
 `rling clean-list.txt clean-list.txt`\
 This will read clean-list.txt, remove all duplicate lines, and re-write it (in original order) back to clean-list.txt.  This use is permitted (maybe not recommended, but permitted), because all of the input file is read into memory prior to opening the output file for writing.  Great if you are short on disk space, too.
 
-`rling big-file.txt.gz deduped.txt`\
-Gzip-compressed input files are handled transparently, with no need to decompress first.  This reads `big-file.txt.gz`, deduplicates, and writes plain text to `deduped.txt`.
+`rling big-file.txt.xz deduped.txt`\
+Compressed input files are handled transparently, with no need to decompress first.  The format (gzip, xz, bzip2 or zstd) is detected from the data, so `big-file.txt.gz`, `big-file.txt.bz2` and `big-file.txt.zst` work the same way.  This reads `big-file.txt.xz`, deduplicates, and writes plain text to `deduped.txt`.
 
-`rling input.txt cleaned.txt old-data.txt.gz archive/*.gz`\
-Remove files can also be gzip-compressed.  This removes any lines from `input.txt` that appear in `old-data.txt.gz` or any of the compressed files in `archive/`.  Plain and compressed files can be freely mixed.
+`rling input.txt cleaned.txt old-data.txt.zst archive/*.gz`\
+Remove files can also be compressed, in any supported format.  This removes any lines from `input.txt` that appear in `old-data.txt.zst` or any of the compressed files in `archive/`.  Plain and compressed files, and different formats, can be freely mixed.
 
-`rling data.txt.gz /dev/null -q cw`\
-Frequency analysis works on compressed input too.  This produces a count+word frequency table from a compressed file without decompressing it to disk first.
+`rling data.txt.zst /dev/null -q cw`\
+Frequency analysis works on compressed input too, in any supported format.  This produces a count+word frequency table from a compressed file without decompressing it to disk first.
 
 `find /path/to/names -type f -print0 | xargs -0 gzcat | rling stdin stdout | gzip -9 > all-names.txt.gz`\
 For more complex pipelines, stdin/stdout still work as before.  This example deduplicates across many files via a pipe.
@@ -237,10 +250,10 @@ Produces the same frequency table, but also reports how many lines from `passwor
 ### Analyzing compressed files
 
 ```bash
-rling -q h wordlist.txt.gz stdout
+rling -q h wordlist.txt.zst stdout
 ```
 
-Works directly on gzip-compressed files, with no need to decompress first.
+Works directly on compressed files — gzip, xz, bzip2 or zstd, detected automatically — with no need to decompress first.
 
 ## Features
 I'm looking forward to feedback from the community for new features and options.  We're pretty happy with how it works right now.

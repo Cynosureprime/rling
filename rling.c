@@ -15,12 +15,301 @@
 #include <getopt.h>
 #endif
 #include <time.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <lzma.h>
+#include <bzlib.h>
+#include <zstd.h>
 
 
 #include "yarn.h"
+
+/* ---- transparent decompressing reader (plain/gzip/xz/bzip2/zstd) --------
+ * Drop-in replacement for the zlib gzFile reader rling used before.  The
+ * format is detected from the first bytes read and those same bytes are
+ * fed forward into the decoder -- the input is never seeked or reopened,
+ * so stdin, named pipes and process substitution work for every format.
+ * gzip and plain were the original behaviour; xz, bzip2 and zstd are new.
+ * A truncated or corrupt stream is FATAL, never a silent short read, so a
+ * partial decode can never masquerade as a clean run. */
+enum { CRD_PLAIN = 0, CRD_GZIP, CRD_XZ, CRD_BZ2, CRD_ZSTD };
+#define CRD_INBUF (256*1024)
+
+typedef struct crd {
+    int fd;
+    int type;
+    int started;
+    int done;            /* no more decompressed output will come */
+    int fd_eof;          /* read() hit end of file/pipe */
+    const char *name;
+    unsigned char in[CRD_INBUF];
+    size_t in_len;       /* valid bytes in `in` */
+    size_t in_pos;       /* PLAIN/ZSTD: next unconsumed byte of `in` */
+    z_stream z;
+    lzma_stream xz;
+    bz_stream bz;
+    ZSTD_DStream *zds;
+    size_t zr;           /* zstd: last decode hint (0 == frame boundary) */
+    size_t member_out;   /* gzip/bz2: output produced in current member */
+    int had_member;      /* gzip/bz2: >=1 full member decoded */
+} CRD;
+
+static void crd_fatal(CRD *c, const char *why) {
+    fprintf(stderr, "FATAL: %s:%d decompressing \"%s\": %s\n",
+            __FILE__, __LINE__, c->name ? c->name : "(input)", why);
+    exit(1);
+}
+
+/* True if the first n bytes carry a magic rling can decompress. */
+static int crd_is_compressed(const unsigned char *b, size_t n) {
+    if (n >= 2 && b[0] == 0x1f && b[1] == 0x8b) return 1;                 /* gzip */
+    if (n >= 6 && b[0] == 0xFD && b[1]=='7' && b[2]=='z' &&
+        b[3]=='X' && b[4]=='Z' && b[5]==0x00) return 1;                   /* xz   */
+    if (n >= 4 && b[0]==0x28 && b[1]==0xB5 && b[2]==0x2F && b[3]==0xFD)
+        return 1;                                                        /* zstd */
+    if (n >= 10 && b[0]=='B' && b[1]=='Z' && b[2]=='h' &&
+        b[3]>='1' && b[3]<='9' &&
+        ((b[4]==0x31&&b[5]==0x41&&b[6]==0x59&&b[7]==0x26&&b[8]==0x53&&b[9]==0x59) ||
+         (b[4]==0x17&&b[5]==0x72&&b[6]==0x45&&b[7]==0x38&&b[8]==0x50&&b[9]==0x90)))
+        return 1;                                                        /* bzip2 */
+    return 0;
+}
+
+/* Read one buffer from fd into `in`.  Returns bytes read, 0 at eof. */
+static size_t crd_fill(CRD *c) {
+    ssize_t n;
+    if (c->fd_eof) return 0;
+    n = read(c->fd, c->in, sizeof(c->in));
+    if (n < 0) crd_fatal(c, strerror(errno));
+    if (n == 0) { c->fd_eof = 1; return 0; }
+    c->in_len = (size_t)n;
+    return (size_t)n;
+}
+
+static void crd_detect(CRD *c) {
+    unsigned char *b = c->in;
+    size_t n;
+    c->started = 1;
+    /* Gather enough of a header to recognise any magic, tolerant of a pipe
+     * that dribbles a few bytes per read. */
+    while (c->in_len < 16 && !c->fd_eof) {
+        ssize_t r = read(c->fd, c->in + c->in_len, sizeof(c->in) - c->in_len);
+        if (r < 0) crd_fatal(c, strerror(errno));
+        if (r == 0) { c->fd_eof = 1; break; }
+        c->in_len += (size_t)r;
+    }
+    n = c->in_len;
+    if (n >= 2 && b[0]==0x1f && b[1]==0x8b) {
+        c->type = CRD_GZIP;
+        c->z.zalloc = Z_NULL; c->z.zfree = Z_NULL; c->z.opaque = Z_NULL;
+        c->z.next_in = Z_NULL; c->z.avail_in = 0;
+        if (inflateInit2(&c->z, 15+32) != Z_OK) crd_fatal(c, "inflateInit2 failed");
+        c->z.next_in = c->in; c->z.avail_in = (uInt)n;
+    } else if (n >= 6 && b[0]==0xFD && b[1]=='7' && b[2]=='z' &&
+               b[3]=='X' && b[4]=='Z' && b[5]==0x00) {
+        lzma_stream tmp = LZMA_STREAM_INIT;
+        c->type = CRD_XZ;
+        c->xz = tmp;
+        if (lzma_stream_decoder(&c->xz, UINT64_MAX, LZMA_CONCATENATED) != LZMA_OK)
+            crd_fatal(c, "lzma_stream_decoder init failed");
+        c->xz.next_in = c->in; c->xz.avail_in = n;
+    } else if (n >= 10 && b[0]=='B' && b[1]=='Z' && b[2]=='h' &&
+               b[3]>='1' && b[3]<='9' &&
+               ((b[4]==0x31&&b[5]==0x41&&b[6]==0x59&&b[7]==0x26&&b[8]==0x53&&b[9]==0x59) ||
+                (b[4]==0x17&&b[5]==0x72&&b[6]==0x45&&b[7]==0x38&&b[8]==0x50&&b[9]==0x90))) {
+        c->type = CRD_BZ2;
+        memset(&c->bz, 0, sizeof(c->bz));
+        if (BZ2_bzDecompressInit(&c->bz, 0, 0) != BZ_OK)
+            crd_fatal(c, "BZ2_bzDecompressInit failed");
+        c->bz.next_in = (char *)c->in; c->bz.avail_in = (unsigned)n;
+    } else if (n >= 4 && b[0]==0x28 && b[1]==0xB5 && b[2]==0x2F && b[3]==0xFD) {
+        c->type = CRD_ZSTD;
+        c->zds = ZSTD_createDStream();
+        if (!c->zds) crd_fatal(c, "ZSTD_createDStream failed");
+        ZSTD_initDStream(c->zds);
+        c->in_pos = 0;
+    } else {
+        c->type = CRD_PLAIN;
+        c->in_pos = 0;
+    }
+}
+
+static int crd_read(CRD *c, void *buf, size_t len) {
+    unsigned char *out = buf;
+    if (!c->started) crd_detect(c);
+    if (c->done || len == 0) return 0;
+
+    if (c->type == CRD_PLAIN) {
+        size_t got = 0;
+        if (c->in_pos < c->in_len) {          /* serve leftover sniff bytes */
+            size_t avail = c->in_len - c->in_pos;
+            size_t take = avail < len ? avail : len;
+            memcpy(out, c->in + c->in_pos, take);
+            c->in_pos += take; got += take;
+        }
+        if (got < len && !c->fd_eof) {
+            ssize_t n = read(c->fd, out + got, len - got);
+            if (n < 0) crd_fatal(c, strerror(errno));
+            if (n == 0) c->fd_eof = 1;
+            got += (size_t)n;
+        }
+        if (got == 0) c->done = 1;
+        return (int)got;
+    }
+
+    if (c->type == CRD_GZIP) {
+        c->z.next_out = out; c->z.avail_out = (uInt)len;
+        while (c->z.avail_out > 0) {
+            size_t before; int r;
+            if (c->z.avail_in == 0) {
+                if (crd_fill(c) == 0) {
+                    if (c->had_member && c->member_out == 0) { c->done = 1; break; }
+                    crd_fatal(c, "gzip input truncated (ended inside a member)");
+                }
+                c->z.next_in = c->in; c->z.avail_in = (uInt)c->in_len;
+            }
+            before = c->z.avail_out;
+            r = inflate(&c->z, Z_NO_FLUSH);
+            c->member_out += before - c->z.avail_out;
+            if (r == Z_STREAM_END) {
+                c->had_member = 1; c->member_out = 0;
+                if (c->z.avail_in > 0 || !c->fd_eof) {
+                    if (inflateReset(&c->z) != Z_OK) crd_fatal(c, "inflateReset failed");
+                    continue;
+                }
+                c->done = 1; break;
+            } else if (r == Z_OK || r == Z_BUF_ERROR) {
+                continue;                     /* need input/output; loop refills */
+            } else {
+                if (c->had_member && c->member_out == 0) { c->done = 1; break; }
+                crd_fatal(c, c->z.msg ? c->z.msg : "gzip decode error");
+            }
+        }
+        return (int)(len - c->z.avail_out);
+    }
+
+    if (c->type == CRD_XZ) {
+        c->xz.next_out = out; c->xz.avail_out = len;
+        while (c->xz.avail_out > 0) {
+            lzma_ret r;
+            if (c->xz.avail_in == 0 && !c->fd_eof) {
+                size_t fn = crd_fill(c);
+                if (fn) { c->xz.next_in = c->in; c->xz.avail_in = fn; }
+            }
+            r = lzma_code(&c->xz, c->fd_eof ? LZMA_FINISH : LZMA_RUN);
+            if (r == LZMA_STREAM_END) { c->done = 1; break; }
+            if (r != LZMA_OK)
+                crd_fatal(c, r == LZMA_BUF_ERROR ? "xz input truncated" : "xz decode error");
+        }
+        return (int)(len - c->xz.avail_out);
+    }
+
+    if (c->type == CRD_BZ2) {
+        c->bz.next_out = (char *)out; c->bz.avail_out = (unsigned)len;
+        while (c->bz.avail_out > 0) {
+            unsigned before; int r;
+            if (c->bz.avail_in == 0) {
+                if (crd_fill(c) == 0) {
+                    if (c->had_member && c->member_out == 0) { c->done = 1; break; }
+                    crd_fatal(c, "bzip2 input truncated");
+                }
+                c->bz.next_in = (char *)c->in; c->bz.avail_in = (unsigned)c->in_len;
+            }
+            before = c->bz.avail_out;
+            r = BZ2_bzDecompress(&c->bz);
+            c->member_out += before - c->bz.avail_out;
+            if (r == BZ_STREAM_END) {
+                /* Save BOTH cursors: BZ2_bzDecompressInit (after the memset)
+                 * resets the whole stream, so the output position must be
+                 * carried across or the next read loses its place. */
+                char *ni = c->bz.next_in;  unsigned ai = c->bz.avail_in;
+                char *no = c->bz.next_out; unsigned ao = c->bz.avail_out;
+                c->had_member = 1; c->member_out = 0;
+                if (ai > 0 || !c->fd_eof) {    /* concatenated .bz2 members */
+                    BZ2_bzDecompressEnd(&c->bz);
+                    memset(&c->bz, 0, sizeof(c->bz));
+                    if (BZ2_bzDecompressInit(&c->bz, 0, 0) != BZ_OK)
+                        crd_fatal(c, "BZ2_bzDecompressInit failed");
+                    c->bz.next_in = ni;  c->bz.avail_in = ai;
+                    c->bz.next_out = no; c->bz.avail_out = ao;
+                    continue;
+                }
+                c->done = 1; break;
+            } else if (r == BZ_OK) {
+                continue;
+            } else {
+                if (c->had_member && c->member_out == 0) { c->done = 1; break; }
+                crd_fatal(c, "bzip2 decode error");
+            }
+        }
+        return (int)(len - c->bz.avail_out);
+    }
+
+    if (c->type == CRD_ZSTD) {
+        ZSTD_outBuffer ob = { out, len, 0 };
+        while (ob.pos < ob.size) {
+            ZSTD_inBuffer ib;
+            if (c->in_pos >= c->in_len) {
+                if (crd_fill(c) == 0) {
+                    if (c->zr != 0) crd_fatal(c, "zstd input truncated");
+                    c->done = 1; break;
+                }
+                c->in_pos = 0;
+            }
+            ib.src = c->in; ib.size = c->in_len; ib.pos = c->in_pos;
+            c->zr = ZSTD_decompressStream(c->zds, &ob, &ib);
+            c->in_pos = ib.pos;
+            if (ZSTD_isError(c->zr)) crd_fatal(c, ZSTD_getErrorName(c->zr));
+        }
+        return (int)ob.pos;
+    }
+    return 0;
+}
+
+static int crd_eof(CRD *c) {
+    if (!c->started) return 0;
+    if (c->type == CRD_PLAIN)
+        return c->done || (c->fd_eof && c->in_pos >= c->in_len);
+    return c->done;
+}
+
+static CRD *crd_dopen(int fd) {
+    CRD *c;
+    if (fd < 0) return NULL;
+    c = calloc(1, sizeof(CRD));
+    if (!c) return NULL;
+    c->fd = fd; c->name = "(stdin)";
+    return c;
+}
+
+static CRD *crd_open(const char *name) {
+    CRD *c;
+    int fd = open(name, O_RDONLY
+#ifdef O_BINARY
+                  | O_BINARY
+#endif
+                  );
+    if (fd < 0) return NULL;
+    c = calloc(1, sizeof(CRD));
+    if (!c) { close(fd); return NULL; }
+    c->fd = fd; c->name = name;
+    return c;
+}
+
+static void crd_close(CRD *c) {
+    if (!c) return;
+    switch (c->type) {
+        case CRD_GZIP: inflateEnd(&c->z); break;
+        case CRD_XZ:   lzma_end(&c->xz); break;
+        case CRD_BZ2:  BZ2_bzDecompressEnd(&c->bz); break;
+        case CRD_ZSTD: if (c->zds) ZSTD_freeDStream(c->zds); break;
+        default: break;
+    }
+    if (c->fd >= 0) close(c->fd);
+    free(c);
+}
 
 /*
  * rling is a tool that allows files to be processed in several ways.
@@ -109,9 +398,12 @@ extern int optopt;
 extern int opterr;
 extern int optreset;
 
- static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.88 2026/11/07 19:18:39 dlr Exp dlr $";
+ static char *Version = "$Header: /Users/dlr/src/mdfind/RCS/rling.c,v 1.89 2026/11/13 13:58:37 dlr Exp dlr $";
 /*
  * $Log: rling.c,v $
+ * Revision 1.89  2026/11/13 13:58:37  dlr
+ * Transparent xz, bzip2 and zstd decompression of input and remove files. A streaming reader (crd_) detects the format from the first bytes and feeds them forward into the decoder, never seeking or reopening the input, so every format works on stdin, pipes and FIFOs as well as regular files; gzip and plain are unchanged. Files of several concatenated streams read as one list. A truncated or corrupt stream is fatal, not a silent short read. zip and 7z are not added, as they need random access. The mmap-staging and plain-versus-stream routing now recognise every compressed magic, not only gzip. Links liblzma, libbz2 and libzstd.
+ *
  * Revision 1.88  2026/11/07 19:18:39  dlr
  * Release carrying qsort_mt.c 1.8. That revision fixes a race in allocate_thread that could leave one contiguous subrange unsorted while qsort_mt returned normally, so a sort, dedupe or -L run could produce out-of-order output with no error. No change to rling.c logic; a header note records the qsort_mt revision it is built with.
  *
@@ -480,7 +772,7 @@ uint64_t *Histogram;
 uint64_t FreqSize;
 
 struct Infiles {
-    gzFile fi;		/* for read (remove files) — gzopen/gzread */
+    CRD *fi;		/* for read (remove files) — crd_open/crd_read */
     FILE *fo;		/* for write (output file, index 1 only) — fopen/fwrite */
     char *fn;
     uint64_t line;
@@ -1819,7 +2111,7 @@ MDXALIGN void filljob(void *dummy) {
  * In practice, I doubt this will affect anyone, but it is something to
  * be aware of
  */
-unsigned int cacheline(gzFile fi,char **mybuf,struct LineInfo **myindex) {
+unsigned int cacheline(CRD *fi,char **mybuf,struct LineInfo **myindex) {
     char *curpos,*readbuf, *f;
     static unsigned int nextline;
     unsigned int dest, curline,len, Linecount, rlen;
@@ -1857,8 +2149,8 @@ unsigned int cacheline(gzFile fi,char **mybuf,struct LineInfo **myindex) {
     }
     curindex = 0;
     x = 0;
-    while (!gzeof(fi)) {
-	x = gzread(fi,curpos,(MAXCHUNK/2)-curcnt-1);
+    while (!crd_eof(fi)) {
+	x = crd_read(fi,curpos,(MAXCHUNK/2)-curcnt-1);
 	if (x >0) {
 	    f = findeol(curpos,x-1);
 	    if (f) break;
@@ -1885,7 +2177,7 @@ unsigned int cacheline(gzFile fi,char **mybuf,struct LineInfo **myindex) {
 	    curpos[curindex+rlen] = '\n';
 	    curindex += len + 1;
 	} else {
-	    if (gzeof(fi)) {
+	    if (crd_eof(fi)) {
 	        curpos[curcnt] = '\n';
 		rlen = len = (curcnt - curindex);
 		if (rlen < 0) rlen = 0;
@@ -2008,11 +2300,11 @@ void getnextline(struct Infiles *infile) {
 	    infile->curline -= offset;
 	    infile->curpos -= offset;
 	    infile->end -= offset;
-	    len = gzread(infile->fi,&infile->Buffer[infile->end],infile->size-infile->end);
+	    len = crd_read(infile->fi,&infile->Buffer[infile->end],infile->size-infile->end);
 	    infile->end += len;
 	    infile->Buffer[infile->end] = '\n';
 	    if (len == 0)
-		infile->eof = gzeof(infile->fi);
+		infile->eof = crd_eof(infile->fi);
 	    eol = findeol(infile->curline,infile->end - infile->curpos);
 	    if (!eol) {
 		if (infile->end >= infile->curpos)
@@ -2024,7 +2316,7 @@ void getnextline(struct Infiles *infile) {
 	infile->curlen = eol - infile->curline +1;
 	if (infile->curpos >= infile->end) {
 	    infile->curlen = 0;
-	    infile->eof = gzeof(infile->fi);
+	    infile->eof = crd_eof(infile->fi);
 	    return;
 	}
 	infile->line++;
@@ -2033,7 +2325,7 @@ void getnextline(struct Infiles *infile) {
 	    eol[-1] = '\n'; infile->curlen--;
 	}
 	if (infile->curlen == 0)
-	    infile->eof = gzeof(infile->fi);
+	    infile->eof = crd_eof(infile->fi);
 	else {
 	    if (infile->curlen > ((infile->size/2)-5)) {
 		fprintf(stderr,"Line %"PRIu64" in \"%s\" is too long at %"PRIu64"\n",infile->line,infile->fn,infile->curlen);
@@ -2177,10 +2469,9 @@ void rli2(int argc, char **argv) {
 	} else {
 	    /* Remove files — gzFile, transparent gz/plain */
 	    if (strcmp(argv[x],"stdin") == 0)
-		Infile[x].fi = gzdopen(dup(0), "rb");
+		Infile[x].fi = crd_dopen(dup(0));
 	    else
-		Infile[x].fi = gzopen(argv[x],"rb");
-	    if (Infile[x].fi) gzbuffer(Infile[x].fi, 128*1024);
+		Infile[x].fi = crd_open(argv[x]);
 	    Infile[x].fo = NULL;
 	}
 	if ((x == 1 && Infile[x].fo == NULL) || (x != 1 && Infile[x].fi == NULL)) {
@@ -2189,10 +2480,10 @@ void rli2(int argc, char **argv) {
 	    fatal_exit();
 	}
 	if (x != 1) {
-	    Infile[x].end = gzread(Infile[x].fi,Infile[x].Buffer,lsize);
+	    Infile[x].end = crd_read(Infile[x].fi,Infile[x].Buffer,lsize);
 	    if (Infile[x].end < 0) Infile[x].end = 0;
 	    Infile[x].Buffer[Infile[x].end] = '\n';
-	    if (Infile[x].end == 0) Infile[x].eof = gzeof(Infile[x].fi);
+	    if (Infile[x].end == 0) Infile[x].eof = crd_eof(Infile[x].fi);
 	    Infile[x].curline = Infile[x].Buffer;
 	    eol = findeol(Infile[x].Buffer,Infile[x].end);
 	    if (!eol) eol = &Infile[x].Buffer[Infile[x].end];
@@ -2286,7 +2577,7 @@ void rli2(int argc, char **argv) {
     fprintf(stderr,"%s total lines written, %"PRIu64" lines %s\n",commify(Write),rem,(DoCommon)?"in common":"removed");
     for (x=0; x < argc; x++) {
 	if (x == 1 && Infile[x].fo) fclose(Infile[x].fo);
-	else if (Infile[x].fi) gzclose(Infile[x].fi);
+	else if (Infile[x].fi) crd_close(Infile[x].fi);
     }
 
 }
@@ -2467,7 +2758,7 @@ int main(int argc, char **argv) {
     int curline, numline, Linecount, dbindex;
     char *readbuf;
     struct LineInfo *readindex;
-    gzFile fin, fi;
+    CRD *fin, *fi;
     FILE *fo, *vmfile;
     uint64_t crc, memsize, memscale;
     off_t filesize, readsize;
@@ -2794,18 +3085,17 @@ errexit:
 
 
     if (strcmp(argv[0],"stdin") == 0) {
-	fin = gzdopen(dup(0), "rb");
+	fin = crd_dopen(dup(0));
 #ifdef _WIN32
   setmode(0,O_BINARY);
 #endif
     } else
-	fin = gzopen(argv[0],"rb");
+	fin = crd_open(argv[0]);
     if (!fin) {
 	fprintf(stderr,"Can't open:");
 	perror(argv[0]);
 	fatal_exit();
     }
-    gzbuffer(fin, 128*1024);
 
     if (ProcMode == 2) {
 	/* For mmap mode, we need a plain uncompressed file.
@@ -2822,11 +3112,12 @@ errexit:
 	} else if (!(statb.st_mode & S_IFREG)) {
 	    need_staging = 1;
 	} else {
-	    /* Check for gzip magic bytes (0x1f 0x8b) */
+	    /* Any compressed format must be staged (decompressed) before mmap */
 	    FILE *mc = fopen(argv[0],"rb");
 	    if (mc) {
-		unsigned char hdr[2] = {0,0};
-		if (fread(hdr,1,2,mc) == 2 && hdr[0] == 0x1f && hdr[1] == 0x8b)
+		unsigned char hdr[16];
+		size_t hn = fread(hdr,1,sizeof(hdr),mc);
+		if (crd_is_compressed(hdr,hn))
 		    need_staging = 1;
 		fclose(mc);
 	    }
@@ -2841,8 +3132,8 @@ errexit:
 		perror(DBOUT);
 		fatal_exit();
 	    }
-	    while (!gzeof(fin)) {
-		x = gzread(fin,Readbuf,MAXCHUNK);
+	    while (!crd_eof(fin)) {
+		x = crd_read(fin,Readbuf,MAXCHUNK);
 		if (x > 0)
 		    if (fwrite(Readbuf,x,1,fo) != 1) {
 			fprintf(stderr,"Write error. Disk full?\n");
@@ -2850,7 +3141,7 @@ errexit:
 		        fatal_exit();
 		    }
 	    }
-	    gzclose(fin);
+	    crd_close(fin);
 	    fclose(fo);
 	    /* Re-open decompressed staging file as plain FILE* for mmap */
 	    mmap_fi = fopen(DBOUT,"rb");
@@ -2868,7 +3159,7 @@ errexit:
 	    }
 	} else {
 	    /* Plain uncompressed regular file — open as FILE* for mmap */
-	    gzclose(fin);
+	    crd_close(fin);
 	    fin = NULL;
 	    mmap_fi = fopen(argv[0],"rb");
 	    if (fstat(fileno(mmap_fi),&statb)) {
@@ -2901,14 +3192,13 @@ errexit:
 	int is_plain_regular = 0;
 	if (strcmp(argv[0],"stdin") != 0 && !stat(argv[0],&statb) &&
 	    (statb.st_mode & S_IFREG)) {
-	    /* Check for gzip magic */
+	    /* Plain only if no compressed magic — compressed must stream (its
+	     * decompressed size is unknown, so the fixed-size path can't hold it) */
 	    FILE *mc = fopen(argv[0],"rb");
 	    if (mc) {
-		unsigned char hdr[2] = {0,0};
-		if (fread(hdr,1,2,mc) == 2 && hdr[0] == 0x1f && hdr[1] == 0x8b)
-		    is_plain_regular = 0;
-		else
-		    is_plain_regular = 1;
+		unsigned char hdr[16];
+		size_t hn = fread(hdr,1,sizeof(hdr),mc);
+		is_plain_regular = !crd_is_compressed(hdr,hn);
 		fclose(mc);
 	    }
 	}
@@ -2925,7 +3215,7 @@ errexit:
 		while (totalread < filesize) {
 		    uint64_t chunk = filesize - totalread;
 		    if (chunk > MAXCHUNK) chunk = MAXCHUNK;
-		    readsize = gzread(fin,&Fileinmem[totalread], chunk);
+		    readsize = crd_read(fin,&Fileinmem[totalread], chunk);
 		    if (readsize <= 0) {
 			if (readsize < 0) {
 			    fprintf(stderr,"Read error on input file.\n");
@@ -2951,10 +3241,10 @@ errexit:
 	}
 	Line = 0;
 
-	while (!gzeof(fin)) {
-	    readsize = gzread(fin,&Fileinmem[filesize],MAXCHUNK);
+	while (!crd_eof(fin)) {
+	    readsize = crd_read(fin,&Fileinmem[filesize],MAXCHUNK);
 	    if (readsize <= 0) {
-		if (gzeof(fin) || readsize <0) break;
+		if (crd_eof(fin) || readsize <0) break;
 	    }
 	    filesize += readsize;
 	    Fileinmem = realloc(Fileinmem,filesize + MAXCHUNK + 16);
@@ -2976,7 +3266,7 @@ errexit:
 	    fprintf(stderr,"Probably a bug in the program\n");
 	    fatal_exit();
 	}
-	if (fin) gzclose(fin);
+	if (fin) crd_close(fin);
 
 	Fileinmem[filesize] = '\n';
 	Fileend = &Fileinmem[filesize];
@@ -3387,12 +3677,12 @@ errexit:
 	    continue;
 	}
 	if (strcmp(argv[x],"stdin") == 0) {
-		fi = gzdopen(dup(0), "rb");
+		fi = crd_dopen(dup(0));
 #ifdef _WIN32
   setmode(0,O_BINARY);
 #endif
 	} else
-	    fi = gzopen(argv[x],"rb");
+	    fi = crd_open(argv[x]);
 	if (!fi) {
 	    fprintf(stderr,"Can't open:");
 	    perror(argv[x]);
@@ -3463,7 +3753,7 @@ errexit:
 	    fprintf(stderr,"%"PRIu64" %s\n",(uint64_t)Currem_global,(DoCommon)?"in common":"removed");
 	Totrem += Currem_global;
 	release(Currem_lock);
-	gzclose(fi);
+	crd_close(fi);
 	if (Unique_global <= Totrem) {
 	    if (x+1 < argc)
 		fprintf(stderr,"All target lines removed, skipping %d remaining file%s\n",
@@ -3678,7 +3968,7 @@ errexit:
 	munmap(Sortlist,(Estline+16)*sizeof(char *));
 	munmap(Fileinmem,Filesize+4096);
 	fclose(vmfile);
-	if (fin) gzclose(fin);
+	if (fin) crd_close(fin);
     }
 
 finalexit:
